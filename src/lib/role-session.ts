@@ -30,7 +30,7 @@ export function signPreviewRoleCookie(role: Role): string {
 }
 
 export function verifyPreviewRoleCookie(value: string | undefined): Role {
-  if (!value) return "owner";
+  if (!value) return "staff";
   const separator = value.indexOf(".");
   if (separator === -1) return "staff";
   const role = value.slice(0, separator);

@@ -8,13 +8,13 @@ export const ROLE_PERMISSIONS = {
       "add_inventory", "edit_inventory", "edit_invoice_proposal",
       "delete_inventory",
       "confirm_invoice_proposal", "discard_invoice_proposal",
-      "set_threshold", "approve", "reject", "complete_task", "reset",
+      "set_threshold", "approve", "reject", "update_task_progress", "complete_task", "reset",
       "upload_invoice", "view_invoice_file",
     ],
   },
   staff: {
     pages: ["overview", "tasks", "activity", "inventory"],
-    actions: ["complete_task"],
+    actions: ["update_task_progress", "complete_task"],
   },
 } as const satisfies Record<Role, { pages: readonly OperationId[]; actions: readonly string[] }>;
 
@@ -67,6 +67,8 @@ export function filterStateForRole(response: StateResponse, role: Role): StateRe
 export function roleBoundAction(action: InventoryAction, role: Role): InventoryAction {
   switch (action.type) {
     case "complete_task":
+      return { ...action, payload: { ...action.payload, role } };
+    case "update_task_progress":
       return { ...action, payload: { ...action.payload, role } };
     case "approve":
       return { ...action, payload: { ...action.payload, role } };

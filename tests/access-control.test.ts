@@ -32,7 +32,7 @@ describe("Owner and Staff permission matrix", () => {
     expect(ROLE_PERMISSIONS.staff.pages).toEqual([
       "overview", "tasks", "activity", "inventory",
     ]);
-    expect(ROLE_PERMISSIONS.staff.actions).toEqual(["complete_task"]);
+    expect(ROLE_PERMISSIONS.staff.actions).toEqual(["update_task_progress", "complete_task"]);
     for (const action of ROLE_PERMISSIONS.staff.actions) {
       expect(ROLE_PERMISSIONS.owner.actions).toContain(action);
     }
@@ -42,8 +42,8 @@ describe("Owner and Staff permission matrix", () => {
     const cookie = signPreviewRoleCookie("owner");
     expect(verifyPreviewRoleCookie(cookie)).toBe("owner");
     expect(verifyPreviewRoleCookie(signPreviewRoleCookie("staff"))).toBe("staff");
-    expect(verifyPreviewRoleCookie(`${cookie.slice(0, -2)}00`)).toBe("staff");
-    expect(verifyPreviewRoleCookie(undefined)).toBe("owner");
+    expect(verifyPreviewRoleCookie(signPreviewRoleCookie("staff").replace(/^staff/, "owner"))).toBe("staff");
+    expect(verifyPreviewRoleCookie(undefined)).toBe("staff");
   });
 
   it("prevents a Staff API request from spoofing Owner in the submitted action", async () => {
@@ -68,6 +68,23 @@ describe("Owner and Staff permission matrix", () => {
       }),
     }));
     expect(response.status).toBe(403);
+    expect(await readFile(statePath, "utf8")).toBe(before);
+  });
+
+  it("denies every owner-only mutation at the shared service before changing data", async () => {
+    const { dispatchAction, getCurrentState } = await import("../src/lib/store");
+    await getCurrentState();
+    const before = await readFile(statePath, "utf8");
+    const protectedActions = ROLE_PERMISSIONS.owner.actions.filter(
+      (type) => type !== "update_task_progress" && type !== "complete_task" &&
+        type !== "upload_invoice" && type !== "view_invoice_file",
+    );
+    for (const type of protectedActions) {
+      await expect(dispatchAction({
+        type,
+        payload: {},
+      } as InventoryAction, "freshflow-demo", "staff")).rejects.toMatchObject({ status: 403 });
+    }
     expect(await readFile(statePath, "utf8")).toBe(before);
   });
 
@@ -101,26 +118,47 @@ describe("Owner and Staff permission matrix", () => {
   it("lets both roles complete a task and records the actual selected preview role", async () => {
     const { dispatchAction, getCurrentState } = await import("../src/lib/store");
     const initial = (await getCurrentState()).state;
-    const recommendationId = initial.recommendations[0]!.id;
-    const approved = await dispatchAction({
-      type: "approve",
-      payload: { recommendationId, assignedTo: "Aina", role: "staff" },
-    }, "freshflow-demo", "owner");
-    const taskId = approved.state.tasks[0]!.id;
     const { POST } = await import("../app/api/action/route");
-    const ownerCookie = `${PREVIEW_ROLE_COOKIE}=${signPreviewRoleCookie("owner")}`;
-    const response = await POST(new Request("http://freshflow.test/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", cookie: ownerCookie },
-      body: JSON.stringify({
-        action: { type: "complete_task", payload: { taskId, outcomeType: "rotated", role: "staff" } },
-      }),
-    }));
-    expect(response.status).toBe(200);
-    const saved = await response.json();
-    expect(saved.state.tasks[0].status).toBe("completed");
-    expect(saved.state.activity.at(-1).actor).toBe("simulated_owner");
-
+    for (const [index, role] of (["owner", "staff"] as const).entries()) {
+      const recommendationId = initial.recommendations[index]!.id;
+      const approved = await dispatchAction({
+        type: "approve",
+        payload: { recommendationId, assignedTo: "Aina", role: "staff" },
+      }, "freshflow-demo", "owner");
+      const taskId = approved.state.tasks.find((task) => task.recommendationId === recommendationId)!.id;
+      const cookie = `${PREVIEW_ROLE_COOKIE}=${signPreviewRoleCookie(role)}`;
+      const progressResponse = await POST(new Request("http://freshflow.test/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({
+          action: {
+            type: "update_task_progress",
+            payload: { taskId, progressType: "in_progress", progressNote: "Stock check started", role: role === "owner" ? "staff" : "owner" },
+          },
+        }),
+      }));
+      expect(progressResponse.status).toBe(200);
+      const progress = await progressResponse.json();
+      expect(progress.state.tasks.find((task: { id: string }) => task.id === taskId))
+        .toMatchObject({ progressType: "in_progress", progressNote: "Stock check started", status: "open" });
+      expect(progress.state.activity.at(-1).actor).toBe(`simulated_${role}`);
+      const response = await POST(new Request("http://freshflow.test/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", cookie },
+        body: JSON.stringify({
+          action: { type: "complete_task", payload: { taskId, outcomeType: "rotated", role: role === "owner" ? "staff" : "owner" } },
+        }),
+      }));
+      expect(response.status).toBe(200);
+      const saved = await response.json();
+      expect(saved.role).toBe(role);
+      expect(saved.state.tasks.find((task: { id: string }) => task.id === taskId).status).toBe("completed");
+      expect(saved.state.activity.at(-1).actor).toBe(`simulated_${role}`);
+      if (role === "staff") {
+        expect(saved.state.recommendations).toEqual([]);
+        expect(saved.state.invoiceIntakes).toEqual([]);
+      }
+    }
   });
 
   it("allows Owners to delete a batch only after confirmation and blocks Staff", async () => {
@@ -142,18 +180,48 @@ describe("Owner and Staff permission matrix", () => {
       type: "add_inventory",
       payload: {
         productName: "Fresh milk", sku: "MILK", category: "Dairy", unit: "bottles",
-        batchId: "MILK-002", quantity: 3, expiryDate: "2026-10-25",
+        batchId: "MILK-ROLE-NEW", quantity: 3, expiryDate: "2026-10-25",
       },
     }, "freshflow-demo", "owner");
-    const newRisk = added.state.recommendations.find((item) => item.batchId === "MILK-002")!;
+    const newRisk = added.state.recommendations.find((item) => item.batchId === "MILK-ROLE-NEW")!;
     await dispatchAction({
       type: "approve",
       payload: { recommendationId: newRisk.id, assignedTo: "Aina", role: "owner" },
     }, "freshflow-demo", "owner");
     await expect(dispatchAction({
       type: "delete_inventory",
-      payload: { productId: "product-milk", batchId: "MILK-002", confirmed: true },
+      payload: { productId: "product-milk", batchId: "MILK-ROLE-NEW", confirmed: true },
     }, "freshflow-demo", "owner")).rejects.toThrow("open staff task");
+  });
+
+  it("validates task progress without logging fake changes and preserves completed reports", async () => {
+    const { dispatchAction, getCurrentState } = await import("../src/lib/store");
+    const initial = await getCurrentState();
+    const approved = await dispatchAction({
+      type: "approve",
+      payload: { recommendationId: initial.state.recommendations[0]!.id, assignedTo: "Aina", role: "owner" },
+    });
+    const taskId = approved.state.tasks[0]!.id;
+    const before = await readFile(statePath, "utf8");
+    await expect(dispatchAction({
+      type: "update_task_progress",
+      payload: { taskId, progressType: "blocked", role: "staff" },
+    })).rejects.toThrow("Explain why");
+    await expect(dispatchAction({
+      type: "update_task_progress",
+      payload: { taskId, progressType: "not_started", role: "staff" },
+    })).rejects.toThrow("No task progress changes");
+    expect(await readFile(statePath, "utf8")).toBe(before);
+    await dispatchAction({
+      type: "complete_task",
+      payload: { taskId, outcomeType: "reported_to_owner", role: "staff" },
+    });
+    const completedBytes = await readFile(statePath, "utf8");
+    await expect(dispatchAction({
+      type: "update_task_progress",
+      payload: { taskId, progressType: "in_progress", role: "owner" },
+    })).rejects.toThrow("completed task");
+    expect(await readFile(statePath, "utf8")).toBe(completedBytes);
   });
 
   it("sets an HttpOnly signed cookie when the preview role is switched", async () => {

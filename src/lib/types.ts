@@ -1,6 +1,7 @@
 export type PersistenceMode = "replit_postgres" | "test_local";
 export type RecommendationStatus = "pending" | "approved" | "rejected";
 export type TaskStatus = "open" | "completed";
+export type TaskProgressType = "not_started" | "in_progress" | "blocked";
 export type RiskType = "expired" | "approaching";
 export type InvoiceIntakeStatus = "review" | "completed";
 export type InvoiceProposalStatus = "pending" | "confirmed" | "discarded";
@@ -27,6 +28,13 @@ export const TASK_OUTCOME_LABELS: Record<TaskOutcomeType, string> = {
   reported_to_owner: "Reported to owner",
   no_action_taken: "No action taken",
   other: "Other",
+};
+
+export const TASK_PROGRESS_TYPES: TaskProgressType[] = ["not_started", "in_progress", "blocked"];
+export const TASK_PROGRESS_LABELS: Record<TaskProgressType, string> = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  blocked: "Blocked",
 };
 
 export interface BusinessWorkspace {
@@ -94,6 +102,8 @@ export interface StaffTask {
   outcome?: string;
   outcomeType?: TaskOutcomeType;
   outcomeExplanation?: string;
+  progressType?: TaskProgressType;
+  progressNote?: string;
   simulated: boolean;
 }
 
@@ -133,6 +143,7 @@ export interface ActivityEvent {
     | "task_created"
     | "task_assigned"
     | "task_completed"
+    | "task_progress_updated"
     | "inventory_added"
     | "inventory_edited"
     | "inventory_deleted"
@@ -246,6 +257,15 @@ export type InventoryAction =
   | {
       type: "reject";
       payload: { recommendationId: string; reason?: string; role?: "owner" | "staff" };
+    }
+  | {
+      type: "update_task_progress";
+      payload: {
+        taskId: string;
+        progressType: TaskProgressType;
+        progressNote?: string;
+        role?: Role;
+      };
     }
   | {
       type: "complete_task";

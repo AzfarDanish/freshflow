@@ -69,9 +69,9 @@ FreshFlow Demo Shop is the sole available workspace. There is no shop selector o
 
 ### Owner and Staff preview permissions
 
-The Owner/Staff preview uses a signed, HTTP-only role cookie; the server validates permissions independently of request-body role values. Staff can view Overview, Inventory, Staff tasks, and Activity, and can record outcomes for open tasks. Owners can also access Decisions, Invoice intake, and Settings & data, edit/add/delete inventory batches, make recommendation decisions, change settings, and reset the demo. Inventory deletion requires confirmation, removes related pending risks, preserves completed history, and is blocked while the batch has an open task. Invoice upload and file-download routes are owner-only.
+The Owner/Staff preview uses a signed, HTTP-only role cookie; the server validates permissions independently of request-body role values. Staff can view Overview, Inventory, Staff tasks, and Activity, update open tasks to Not started / In progress / Blocked with notes, and record completion outcomes. Owners can do the same and also access Decisions, Invoice intake, and Settings & data, edit/add/delete inventory batches, make recommendation decisions, change settings, and reset the demo. Inventory deletion requires confirmation, removes related pending risks, preserves completed history, and is blocked while the batch has an open task. Invoice upload and file-download routes are owner-only.
 
-This public preview switcher intentionally allows a viewer to select either role. It is a demonstration permission layer—not sign-in, an identity check, or production-grade authentication—and must not be used to protect sensitive or real customer data.
+New or invalid preview sessions use Staff permissions. The public preview switcher intentionally allows a viewer to select either role. It is a demonstration permission layer—not sign-in, an identity check, or production-grade authentication—and must not be used to protect sensitive or real customer data.
 
 ### Tech Stack
 
@@ -161,6 +161,7 @@ Open `http://localhost:5000`.
 ### Persistence and database setup
 
 - **Replit PostgreSQL is the runtime store.** The app requires `DATABASE_URL` and fails explicitly if it is unavailable; it does not silently switch to local files. Replit supplies this value for its managed database. Do not expose it to client code.
+- `SESSION_SECRET` is required to sign and verify preview-role cookies. Keep it server-only in Replit Secrets and available in production; changing it invalidates existing role previews, which fall back to Staff.
 - `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the development database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Replit's Publish flow applies the development-to-production schema diff when you publish.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.

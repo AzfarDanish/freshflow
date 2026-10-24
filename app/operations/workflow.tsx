@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import type { ActivityEvent, Recommendation, StaffTask } from "@/src/lib/types";
 import type { Role } from "@/src/lib/types";
+import { TASK_PROGRESS_LABELS } from "@/src/lib/types";
 import {
   activityActorLabel, batchRisk, dateLabel, dateTimeLabel, taskInventorySummary,
 } from "@/src/lib/operations-view";
@@ -118,11 +119,13 @@ export function TaskRow({
   recommendation,
   busy,
   onComplete,
+  onProgress,
 }: {
   task: StaffTask;
   recommendation?: Recommendation;
   busy: boolean;
   onComplete: () => void;
+  onProgress: () => void;
 }) {
   const inventoryDetails = taskInventorySummary(task, recommendation);
   const open = task.status === "open";
@@ -133,14 +136,16 @@ export function TaskRow({
           <h3 className="item-title">{task.title}</h3>
           {inventoryDetails && <div className="item-meta mono">{inventoryDetails}</div>}
         </div>
-        <StatusBadge tone={open ? "info" : "success"}>{open ? "Open" : "Completed"}</StatusBadge>
+        <StatusBadge tone={open ? task.progressType === "blocked" ? "warning" : "info" : "success"}>{open ? task.progressType && task.progressType !== "not_started" ? TASK_PROGRESS_LABELS[task.progressType] : "Open" : "Completed"}</StatusBadge>
       </div>
       <p className="item-body">{task.instruction}</p>
+      {task.progressNote && <p className="item-note">Progress note: {task.progressNote}</p>}
       <div className="task-foot">
         <span className="task-assignee">Assigned to <strong>{task.assignedTo}</strong>{task.completedAt ? ` · completed ${dateTimeLabel(task.completedAt)}` : ""}</span>
-        {open && (
+        {open && <div className="toolbar">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onProgress} disabled={busy}>Update progress</button>
           <button type="button" className="btn btn-primary btn-sm" onClick={onComplete} disabled={busy}><ClipboardCheck aria-hidden="true" />Report outcome</button>
-        )}
+        </div>}
       </div>
       {task.status === "completed" && task.outcome && (
         <div className="reported">
@@ -158,6 +163,7 @@ function activityIcon(event: ActivityEvent) {
     case "approved": return <CheckCircle2 aria-hidden="true" />;
     case "rejected": return <XCircle aria-hidden="true" />;
     case "task_completed": return <Check aria-hidden="true" />;
+    case "task_progress_updated": return <ClipboardCheck aria-hidden="true" />;
     case "inventory_added": return <Package aria-hidden="true" />;
     case "inventory_edited": return <Pencil aria-hidden="true" />;
     case "inventory_deleted": return <XCircle aria-hidden="true" />;

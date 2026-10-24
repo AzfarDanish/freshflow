@@ -12,7 +12,8 @@ export async function GET(
   { params }: { params: Promise<{ intakeId: string }> },
 ) {
   try {
-    requireActionPermission(roleFromRequest(request), "view_invoice_file");
+    const role = roleFromRequest(request);
+    requireActionPermission(role, "view_invoice_file");
     const { intakeId } = await params;
     const url = new URL(request.url);
     const businessId = url.searchParams.get("businessId") ?? DEFAULT_BUSINESS_ID;
@@ -23,7 +24,7 @@ export async function GET(
     if (!state.state.invoiceIntakes.some((intake) => intake.id === intakeId)) {
       return NextResponse.json({ error: "Invoice not found in this shop." }, { status: 404 });
     }
-    const document = await getInvoiceDocument(businessId, intakeId);
+    const document = await getInvoiceDocument(businessId, intakeId, role);
     if (!document) {
       return NextResponse.json({ error: "The private invoice file is unavailable." }, { status: 404 });
     }

@@ -26,7 +26,9 @@ import type {
   StateResponse,
   StaffTask,
 } from "@/src/lib/types";
-import { TASK_OUTCOME_LABELS, TASK_OUTCOME_TYPES } from "@/src/lib/types";
+import {
+  TASK_OUTCOME_LABELS, TASK_OUTCOME_TYPES, TASK_PROGRESS_LABELS, TASK_PROGRESS_TYPES,
+} from "@/src/lib/types";
 
 let operationQueue: Promise<unknown> = Promise.resolve();
 
@@ -203,7 +205,9 @@ export async function createInvoiceIntake(
   businessId: string,
   intake: InvoiceIntake,
   contents: Buffer,
+  previewRole: Role = "owner",
 ): Promise<StateResponse> {
+  requireActionPermission(previewRole, "upload_invoice");
   return withBusinessState(businessId, async (state, client, mode) => {
     if (state.invoiceIntakes.some((item) => item.id === intake.id)) {
       throw new Error("That invoice has already been uploaded.");
@@ -260,7 +264,9 @@ function localInvoicePath(businessId: string, intakeId: string): string {
 export async function getInvoiceDocument(
   businessId: string,
   intakeId: string,
+  previewRole: Role = "owner",
 ): Promise<{ fileName: string; mimeType: string; sha256: string; contents: Buffer } | null> {
+  requireActionPermission(previewRole, "view_invoice_file");
   requireBusinessWorkspace(businessId);
   if (!/^invoice-[a-f0-9-]{36}$/.test(intakeId)) {
     throw new Error("Invoice reference is invalid.");
@@ -360,6 +366,9 @@ export async function dispatchAction(
         break;
       case "complete_task":
         completeTask(state, action.payload, now);
+        break;
+      case "update_task_progress":
+        updateTaskProgress(state, action.payload, now);
         break;
       case "reset": {
         if (action.payload?.confirmed !== true) {
@@ -918,6 +927,7 @@ function approveRecommendation(
     instruction: recommendation.suggestedAction,
     assignedTo,
     status: "open",
+    progressType: "not_started",
     createdAt: now,
     simulated: recommendation.simulated,
   };
@@ -976,6 +986,39 @@ function rejectRecommendation(
     productId: recommendation.productId,
     batchId: recommendation.batchId,
     recommendationId: recommendation.id,
+  });
+}
+
+function updateTaskProgress(
+  state: AppState,
+  input: Extract<InventoryAction, { type: "update_task_progress" }>["payload"],
+  now: string,
+): void {
+  const task = state.tasks.find((item) => item.id === input.taskId);
+  if (!task) throw new Error("Task not found.");
+  if (task.status !== "open") throw new Error("A completed task cannot have its progress changed.");
+  if (!TASK_PROGRESS_TYPES.includes(input.progressType)) throw new Error("Choose a valid task progress status.");
+  const note = input.progressNote?.trim();
+  if (note && note.length > 500) throw new Error("Progress note must be 500 characters or fewer.");
+  if (input.progressType === "blocked" && (!note || note.length < 3)) {
+    throw new Error("Explain why the task is blocked in at least 3 characters.");
+  }
+  if ((task.progressType ?? "not_started") === input.progressType && task.progressNote === note) {
+    throw new Error("No task progress changes to save.");
+  }
+  task.progressType = input.progressType;
+  task.progressNote = note;
+  addActivity(state, {
+    type: "task_progress_updated",
+    title: "Task progress updated",
+    description: `${task.title}: ${TASK_PROGRESS_LABELS[input.progressType]}.${note ? ` Note: ${note}` : ""}`,
+    occurredAt: now,
+    actor: input.role === "staff" ? "simulated_staff" : "simulated_owner",
+    productId: task.productId,
+    batchId: task.batchId,
+    recommendationId: task.recommendationId,
+    taskId: task.id,
+    simulated: task.simulated,
   });
 }
 

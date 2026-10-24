@@ -4,13 +4,15 @@ import {
   getBusinessWorkspace,
 } from "@/src/lib/businesses";
 import { dispatchAction } from "@/src/lib/store";
-import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
+import { AccessDeniedError, filterStateForRole, requireActionPermission } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
 import {
   TASK_OUTCOME_TYPES,
+  TASK_PROGRESS_TYPES,
   type InvoiceProposalInput,
   type InventoryAction,
   type TaskOutcomeType,
+  type TaskProgressType,
 } from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -231,6 +233,25 @@ function parseAction(input: unknown, role: "owner" | "staff"): InventoryAction {
           role,
         },
       };
+    case "update_task_progress": {
+      const progressType = payload.progressType;
+      if (typeof progressType !== "string" || !TASK_PROGRESS_TYPES.includes(progressType as TaskProgressType)) {
+        throw new Error("Choose a valid task progress status.");
+      }
+      const progressNote = optionalText(payload.progressNote, "Progress note", 500);
+      if (progressType === "blocked" && (!progressNote || progressNote.length < 3)) {
+        throw new Error("Explain why the task is blocked in at least 3 characters.");
+      }
+      return {
+        type: "update_task_progress",
+        payload: {
+          taskId: text(payload.taskId, "Task", 100),
+          progressType: progressType as TaskProgressType,
+          progressNote,
+          role,
+        },
+      };
+    }
     case "complete_task": {
       const outcomeType = payload.outcomeType;
       if (
@@ -292,7 +313,7 @@ export async function POST(request: Request) {
     const role = roleFromRequest(request);
     const action = parseAction(actionEnvelope, role);
     requireActionPermission(role, action.type);
-    return NextResponse.json(await dispatchAction(action, businessId, role), {
+    return NextResponse.json(filterStateForRole(await dispatchAction(action, businessId, role), role), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

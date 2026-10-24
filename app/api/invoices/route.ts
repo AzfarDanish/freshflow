@@ -24,7 +24,8 @@ function safeFileName(value: string): string {
 
 export async function POST(request: Request) {
   try {
-    requireActionPermission(roleFromRequest(request), "upload_invoice");
+    const role = roleFromRequest(request);
+    requireActionPermission(role, "upload_invoice");
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > MAX_INVOICE_BYTES + 65_536) {
       return NextResponse.json({ error: "Invoice must be 5 MB or smaller." }, { status: 413 });
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
       proposals: extraction.proposals,
       simulated: false,
     };
-    const response = await createInvoiceIntake(businessId, intake, contents);
+    const response = await createInvoiceIntake(businessId, intake, contents, role);
     return NextResponse.json(response, {
       status: 201,
       headers: { "Cache-Control": "no-store" },
