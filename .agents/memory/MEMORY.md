@@ -1,0 +1,1 @@
+- [Next.js Replit preview origins](next-replit-preview.md) — include `REPLIT_DEV_DOMAIN` in `allowedDevOrigins` so proxied development assets and HMR load.

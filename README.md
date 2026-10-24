@@ -6,9 +6,9 @@
 
 ---
 
-# Project Name
+# FreshFlow
 
-> A one-sentence description of what your project does and who it is for.
+> FreshFlow helps Malaysian micro and small grocers turn synthetic expiry-risk alerts into reviewed, assigned, and reported inventory actions.
 
 ---
 
@@ -40,27 +40,27 @@
 
 ### Problem
 
-Describe the real-world problem you are solving in 2–4 sentences. Who is affected, and why does it matter?
+Small grocery teams can have difficulty spotting expiry issues across separate stock batches and turning those issues into clearly owned work. FreshFlow demonstrates a focused exception-to-action workflow using batch quantities and expiry dates.
 
 ### Solution
 
-Explain how your project uses AI to solve the problem and what makes it valuable.
+FreshFlow applies deterministic expiry-date rules, explains each flag, asks for an owner decision, and creates a staff task only after approval. The MVP does not use AI, POS data, forecasts, or automatic stock changes.
 
 ### Key Features
 
-- **Feature 1** — Short description.
-- **Feature 2** — Short description.
-- **Feature 3** — Short description.
+- **Expiry visibility** — Show expired stock separately from batches within a configurable expiry window.
+- **Human-reviewed actions** — Explain a recommendation and let the simulated owner approve or reject it.
+- **Accountable follow-through** — Assign work after approval, record a staff-reported outcome, and show simulated events chronologically.
 
 ### Tech Stack
 
 | Layer         | Technology                   |
 | ------------- | ---------------------------- |
-| Frontend      | e.g. HTML, React             |
-| Backend       | e.g. Python, Flask / FastAPI |
-| Database      | e.g. PostgreSQL, SQLite      |
-| AI / Compute  | RunPod (GPU)                 |
-| Hosting / Dev | Replit                       |
+| Frontend      | Next.js App Router, React, TypeScript |
+| Backend       | Next.js route handlers |
+| Database      | Supabase PostgreSQL when configured; local JSON demo otherwise |
+| AI / Compute  | Deterministic rules; no AI or RunPod dependency |
+| Hosting / Dev | Replit |
 
 ---
 
@@ -68,12 +68,16 @@ Explain how your project uses AI to solve the problem and what makes it valuable
 
 ```
 .
+├── app/                     # Next.js operations UI and API routes
+├── src/lib/                 # Expiry rules, shared types, server-side storage
+├── supabase/
+│   └── schema.sql           # Supabase table setup
 ├── docs/                    # Screenshots, diagrams
 ├── runpod/
-│   └── handler.py           # RunPod serverless handler (GPU workload)
+│   └── handler.py           # Preserved Python starter; not used by FreshFlow
 ├── src/
-│   ├── main.py              # Application entry point
-│   └── utils.py             # Helper functions
+│   ├── main.py              # Preserved Python starter entry point
+│   └── utils.py             # Preserved Python starter helpers
 ├── submission/              # Required submission documents
 │   ├── SDC2026_TeamName_Preliminary.pdf      # Preliminary submission
 │   ├── SDC2026_TeamName_TechDeclaration.pdf  # Technology declaration
@@ -85,16 +89,16 @@ Explain how your project uses AI to solve the problem and what makes it valuable
 ├── .gitignore
 ├── .replit                  # Replit run configuration
 ├── LICENSE
-├── requirements.txt         # Python dependencies
+├── requirements.txt         # Preserved Python starter dependencies
+├── package.json             # Next.js scripts and dependencies
 └── README.md
 ```
 
 ### Architecture
 
 ```
-User ──► Replit (App / API) ──► RunPod Endpoint (GPU model)
-                │
-                └──► Response returned to user
+Browser ──► Next.js UI and API ──► Supabase PostgreSQL (if configured)
+                         └──────► Local demo JSON file (otherwise)
 ```
 
 ---
@@ -103,11 +107,10 @@ User ──► Replit (App / API) ──► RunPod Endpoint (GPU model)
 
 ### Option 1 — Run on Replit (Recommended)
 
-1. Open the [Replit Project](https://replit.com/@your-username/your-project), or import this repository via **Create Repl → Import from GitHub**.
-2. Open the **Secrets** tab (🔒) and add the variables listed in `.env.example`:
-   - `RUNPOD_API_KEY`
-   - `RUNPOD_ENDPOINT_ID`
-3. Click **Run**. Replit uses the `.replit` file to start `python src/main.py`.
+1. Import this repository into Replit.
+2. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
+3. With no Supabase variables, the app labels itself **Local demo** and stores state in `.data/freshflow-demo.json` on the running workspace.
+4. To use Supabase persistence, add both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in Replit Secrets after applying `supabase/schema.sql`.
 
 ### Option 2 — Run Locally
 
@@ -116,54 +119,52 @@ User ──► Replit (App / API) ──► RunPod Endpoint (GPU model)
 git clone https://github.com/your-username/your-project.git
 cd your-project
 
-# 2. Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+# 2. Install Node.js 20.9+ and dependencies
+npm ci
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Optional: configure Supabase
+cp .env.example .env
+# Add both Supabase values to .env only if using Supabase; otherwise leave blank.
 
-# 4. Configure environment variables
-cp .env.example .env            # then fill in your values
-
-# 5. Run the app
-python src/main.py
+# 4. Run the app
+npm run dev
 ```
 
-### Run Tests
+Open `http://localhost:5000`.
+
+### Persistence and database setup
+
+- **Local demo mode:** with both Supabase variables absent, FreshFlow writes its synthetic state to `.data/freshflow-demo.json`. This is local to the running workspace and is not a hosted database or multi-user store.
+- **Supabase mode:** set both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The service-role key is read only by server-side code and must never use a `NEXT_PUBLIC_` prefix. If either variable is only partially configured, or the table is unavailable, FreshFlow reports an error instead of silently falling back.
+- Create the `freshflow_state` table by running [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor. The app stores the single demo state as JSONB in the row with ID `demo`.
+- Supabase configuration was not available for this local build, so live database persistence was not verified.
+
+### Tests and build
 
 ```bash
+npm test
+npm run build
 python -m unittest discover tests
 ```
+
+### Scope and limitations
+
+All seed data, added inventory, role changes, recommendations, activity events, and staff-reported outcomes are synthetic. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a task never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
 
 ---
 
 ## How We Use Replit *(Required)*
 
-Describe how your team used Replit. For example:
+Use this section for accurate team evidence. The app is configured to run through Replit's web preview; no hosting or deployment claim is made here.
 
-- **Development:** Collaborative coding in a shared Repl using Multiplayer.
-- **Hosting:** The app is deployed with Replit Deployments at the Live Demo link above.
-- **Secrets:** API keys are stored in Replit Secrets, never in the code.
+- **Development:** The FreshFlow Next.js app runs from the repository's `.replit` configuration.
+- **Secrets:** Optional Supabase server credentials belong in Replit Secrets, never in source control.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](submission/SDC2026_TeamName_Replit_POU.pdf)
 
 ## How We Use RunPod *(Required)*
 
-Describe how your team used RunPod. For example:
-
-- **Workload:** Model inference (e.g. text generation, image processing) runs on a RunPod GPU.
-- **Setup:** `runpod/handler.py` is deployed as a **RunPod Serverless Endpoint**.
-- **Integration:** The Replit app sends requests to the endpoint using `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID`.
-
-Example request:
-
-```bash
-curl -X POST https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"prompt": "Hello"}}'
-```
+FreshFlow does not use RunPod. The original Python handler and dependency files remain in the repository as starter content, but they are not part of the FreshFlow application. Do not claim RunPod usage unless the team separately performs and verifies it.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Runpod_POU.pdf`](submission/SDC2026_TeamName_Runpod_POU.pdf)
 
