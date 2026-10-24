@@ -53,6 +53,10 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 - **Accountable follow-through** — Assign work after approval, record a structured staff-reported outcome (with an explanation for “Other”), and show linked simulated events chronologically.
 - **Supplier invoice intake** — Upload PDF or CSV invoices, review extracted fields and issues, explicitly match or create a product, and add a batch only after owner confirmation.
 
+### Interface
+
+A single operations page with a charcoal sidebar for jumping between sections: Overview (key counts), Decisions, Staff tasks, Activity, Invoice intake, Inventory (searchable and filterable by expiry status) and Settings & data. The top bar holds the shop selector and the simulated Owner/Staff role view. Settings & data contains the expiry threshold, a short statement of what is synthetic or simulated, and a separately confirmed sample-data reset. On narrow screens the sidebar becomes a horizontal bar and tables stack into labelled rows.
+
 ### Tech Stack
 
 | Layer         | Technology                   |

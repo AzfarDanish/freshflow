@@ -932,7 +932,7 @@ function requireDemoRole(
 ): void {
   if (role !== expectedRole) {
     const label = expectedRole === "owner" ? "Owner" : "Staff";
-    throw new Error(`Switch to the ${label} demo role to perform this action.`);
+    throw new Error(`Switch to the ${label} role view to perform this action.`);
   }
 }
 

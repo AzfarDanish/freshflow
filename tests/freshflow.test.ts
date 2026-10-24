@@ -203,7 +203,7 @@ describe("inventory action state transitions", () => {
           role: "owner",
         },
       }),
-    ).rejects.toThrow("Switch to the Staff demo role");
+    ).rejects.toThrow("Switch to the Staff role view");
 
     const completed = await dispatchAction({
       type: "complete_task",

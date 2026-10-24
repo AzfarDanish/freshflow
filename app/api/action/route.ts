@@ -82,7 +82,7 @@ function demoRole(
 ): "owner" | "staff" {
   if (value === undefined) return defaultRole;
   if (value === "owner" || value === "staff") return value;
-  throw new Error("Choose Owner or Staff demo role.");
+  throw new Error("Choose the Owner or Staff role view.");
 }
 
 function isValidDate(value: unknown): value is string {

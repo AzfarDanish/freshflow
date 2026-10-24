@@ -1,115 +1,43 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent } from "react";
 import {
-  Activity, AlertTriangle, ArrowDownRight, Check, CheckCircle2,
-  ChevronDown, CircleHelp, ClipboardList, Clock3, Leaf, LoaderCircle,
-  Package, Pencil, Plus, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles,
-  X, XCircle,
+  AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList,
+  Info, LoaderCircle, Package, Pencil, Plus, RefreshCw, RotateCcw, Search,
+  Settings2, ShieldAlert, SlidersHorizontal, Sparkles, X, XCircle, Activity, Gauge,
 } from "lucide-react";
 import { BUSINESS_WORKSPACES, DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
 import { TASK_OUTCOME_LABELS } from "@/src/lib/types";
-import type { ActivityEvent, AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType } from "@/src/lib/types";
+import type { AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType } from "@/src/lib/types";
+import {
+  batchRisk, dateLabel, expiryGroups, filterInventory, inventoryRows, sortRecommendations,
+  sortTasks, taskInventorySummary, workspaceHasOnlySyntheticRecords,
+} from "@/src/lib/operations-view";
+import type { InventoryFilter } from "@/src/lib/operations-view";
 import { InvoiceIntakePanel } from "@/app/invoice-intake/InvoiceIntakePanel";
 import type { InvoiceIntakePanelProps } from "@/app/invoice-intake/InvoiceIntakePanel";
+import { Sidebar } from "@/app/operations/Sidebar";
+import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/ui";
+import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
+import type { Role } from "@/app/operations/workflow";
 
-type Role = "owner" | "staff";
 type ModalKind = "add" | "edit" | "approve" | "reject" | "complete" | "reset" | null;
 type InventorySelection = { product: Product; batch: InventoryBatch };
-type InventoryFilter = "all" | "expired" | "approaching" | "safe";
 
 const emptyState: AppState = {
   products: [], recommendations: [], tasks: [], activity: [], invoiceIntakes: [],
   settings: { thresholdDays: 3, demoDate: "" },
 };
 
-function dateLabel(value?: string) {
-  if (!value) return "—";
-  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-MY", { day: "numeric", month: "short", year: "numeric" });
-}
-
-function dateTimeLabel(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${date.toLocaleDateString("en-MY", { day: "numeric", month: "short" })} · ${date.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-function taskInventorySummary(
-  task: StaffTask,
-  recommendation?: Recommendation,
-): string {
-  const productName = task.productName ?? recommendation?.productName;
-  const sku = task.sku ?? recommendation?.sku;
-  const batchId = task.batchId ?? recommendation?.batchId;
-  const quantity = task.quantity ?? recommendation?.quantity;
-  const unit = task.unit ?? recommendation?.unit;
-  const expiryDate = task.expiryDate ?? recommendation?.expiryDate;
-  return [
-    productName,
-    sku,
-    batchId ? `Batch ${batchId}` : undefined,
-    quantity !== undefined ? `${quantity} ${unit ?? ""}`.trim() : undefined,
-    expiryDate ? `Expires ${dateLabel(expiryDate)}` : undefined,
-  ].filter(Boolean).join(" · ");
-}
-
-function daysBetween(from: string, to: string) {
-  return Math.round((Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86400000);
-}
-
-function productBatches(products: Product[], demoDate: string, threshold: number) {
-  const expired: { product: Product; batch: Product["batches"][number] }[] = [];
-  const approaching: { product: Product; batch: Product["batches"][number] }[] = [];
-  products.forEach((product) => product.batches.forEach((batch) => {
-    const days = daysBetween(demoDate, batch.expiryDate);
-    if (days < 0) expired.push({ product, batch });
-    else if (days <= threshold) approaching.push({ product, batch });
-  }));
-  const byExpiry = (a: (typeof expired)[number], b: (typeof expired)[number]) => a.batch.expiryDate.localeCompare(b.batch.expiryDate);
-  return { expired: expired.sort(byExpiry), approaching: approaching.sort(byExpiry) };
-}
-
-function Panel({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
-  return <section id={id} className={`panel ${className}`}>{children}</section>;
-}
-
-function Empty({ children }: { children: ReactNode }) {
-  return <div className="table-empty">{children}</div>;
-}
-
-function BatchRows({ items, demoDate }: { items: ReturnType<typeof productBatches>["expired"]; demoDate: string }) {
-  if (!items.length) return <Empty>No batches in this group right now.</Empty>;
-  return <>{items.map(({ product, batch }) => {
-    const remaining = daysBetween(demoDate, batch.expiryDate);
-    return <div className="stock-row" key={batch.id}>
-      <div><div className="product-name">{product.name}</div><div className="product-meta">{product.sku} · {product.category}</div></div>
-      <div className="batch-date">{dateLabel(batch.expiryDate)}</div>
-      <div className="qty">{batch.quantity} {product.unit}</div>
-      <div><span className={`risk-tag ${remaining < 0 ? "risk-expired" : "risk-approaching"}`}>{remaining < 0 ? "Expired" : `${remaining}d left`}</span></div>
-    </div>;
-  })}</>;
-}
-
-function activityIcon(event: ActivityEvent) {
-  switch (event.type) {
-    case "approved": return <CheckCircle2 size={14} />;
-    case "rejected": return <XCircle size={14} />;
-    case "task_completed": return <Check size={14} />;
-    case "inventory_added": return <Package size={14} />;
-    case "inventory_edited": return <Pencil size={14} />;
-    case "settings_changed": return <SlidersHorizontal size={14} />;
-    case "demo_reset": return <RotateCcw size={14} />;
-    default: return <Activity size={14} />;
-  }
-}
-
-function activityActorLabel(actor: ActivityEvent["actor"]): string {
-  if (actor === "simulated_owner") return "Simulated owner";
-  if (actor === "simulated_staff") return "Simulated staff";
-  return "System";
-}
+const DIALOG_TITLES: Record<Exclude<ModalKind, null>, string> = {
+  add: "Add stock batch",
+  edit: "Edit inventory record",
+  approve: "Approve recommendation",
+  reject: "Reject recommendation",
+  complete: "Report task outcome",
+  reset: "Reset sample data",
+};
 
 export default function HomePage() {
   const [response, setResponse] = useState<StateResponse | null>(null);
@@ -134,8 +62,15 @@ export default function HomePage() {
   const [selectedInventory, setSelectedInventory] = useState<InventorySelection | null>(null);
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>("all");
+  const [resetAcknowledged, setResetAcknowledged] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const state = response?.state ?? emptyState;
+  const businessName = response?.business.name ?? BUSINESS_WORKSPACES.find((business) => business.id === businessId)?.name ?? "this shop";
+  const referenceDate = state.settings.demoDate;
+  const thresholdDays = state.settings.thresholdDays;
+
   const loadState = useCallback(async (targetBusinessId: string) => {
     const requestId = ++loadRequestId.current;
     setLoading(true);
@@ -159,9 +94,38 @@ export default function HomePage() {
   useEffect(() => { void loadState(businessId); }, [businessId, loadState]);
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 2600);
+    const timer = window.setTimeout(() => setToast(""), 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  const closeModal = useCallback(() => {
+    setModal(null);
+    window.setTimeout(() => returnFocusRef.current?.focus(), 0);
+  }, []);
+
+  useEffect(() => {
+    if (!modal) return;
+    const dialog = dialogRef.current;
+    const first = dialog?.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea, button[data-autofocus]");
+    (first ?? dialog)?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        closeModal();
+      }
+      if (event.key === "Tab" && dialog) {
+        const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)"));
+        if (!focusable.length) return;
+        const firstItem = focusable[0];
+        const lastItem = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === firstItem) { event.preventDefault(); lastItem.focus(); }
+        else if (!event.shiftKey && document.activeElement === lastItem) { event.preventDefault(); firstItem.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // Focus only when a dialog opens or changes, not on every busy toggle.
+  }, [modal]);
 
   const sendAction = useCallback(async (action: InventoryAction, successMessage: string) => {
     setBusy(true);
@@ -193,9 +157,7 @@ export default function HomePage() {
     }
   }, [businessId]);
 
-  const runInvoiceRequest = useCallback(async (
-    request: () => Promise<Response>,
-  ) => {
+  const runInvoiceRequest = useCallback(async (request: () => Promise<Response>) => {
     setBusy(true);
     setActionError("");
     try {
@@ -219,124 +181,55 @@ export default function HomePage() {
     const form = new FormData();
     form.set("businessId", businessId);
     form.set("file", file);
-    await runInvoiceRequest(() => fetch("/api/invoices", {
-      method: "POST",
-      body: form,
-      headers: { Accept: "application/json" },
-    }));
+    await runInvoiceRequest(() => fetch("/api/invoices", { method: "POST", body: form, headers: { Accept: "application/json" } }));
   }, [businessId, runInvoiceRequest]);
 
-  const saveInvoiceProposal = useCallback(async (
-    intakeId: string,
-    proposalId: string,
-    fields: Parameters<InvoiceIntakePanelProps["onSaveProposal"]>[2],
-  ) => {
-    const { matchedProductId, ...proposalFields } = fields;
-    await runInvoiceRequest(() => fetch("/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        businessId,
-        action: {
-          type: "edit_invoice_proposal",
-          payload: {
-            intakeId,
-            proposalId,
-            fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined },
-            role,
-          },
-        },
-      }),
-    }));
-  }, [businessId, role, runInvoiceRequest]);
+  const postInvoiceAction = useCallback((action: InventoryAction) => runInvoiceRequest(() => fetch("/api/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ businessId, action }),
+  })), [businessId, runInvoiceRequest]);
 
-  const confirmInvoiceProposal = useCallback(async (
-    intakeId: string,
-    proposalId: string,
-    fields: Parameters<InvoiceIntakePanelProps["onConfirmProposal"]>[2],
-  ) => {
+  const saveInvoiceProposal = useCallback(async (intakeId: string, proposalId: string, fields: Parameters<InvoiceIntakePanelProps["onSaveProposal"]>[2]) => {
+    const { matchedProductId, ...proposalFields } = fields;
+    await postInvoiceAction({ type: "edit_invoice_proposal", payload: { intakeId, proposalId, fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined }, role } });
+  }, [postInvoiceAction, role]);
+
+  const confirmInvoiceProposal = useCallback(async (intakeId: string, proposalId: string, fields: Parameters<InvoiceIntakePanelProps["onConfirmProposal"]>[2]) => {
     const { matchMode, matchedProductId, ...proposalFields } = fields;
-    await runInvoiceRequest(() => fetch("/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        businessId,
-        action: {
-          type: "confirm_invoice_proposal",
-          payload: {
-            intakeId,
-            proposalId,
-            fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined },
-            matchMode,
-            role,
-          },
-        },
-      }),
-    }));
-  }, [businessId, role, runInvoiceRequest]);
+    await postInvoiceAction({ type: "confirm_invoice_proposal", payload: { intakeId, proposalId, fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined }, matchMode, role } });
+  }, [postInvoiceAction, role]);
 
   const discardInvoiceProposal = useCallback(async (intakeId: string, proposalId: string) => {
-    await runInvoiceRequest(() => fetch("/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        businessId,
-        action: {
-          type: "discard_invoice_proposal",
-          payload: { intakeId, proposalId, role },
-        },
-      }),
-    }));
-  }, [businessId, role, runInvoiceRequest]);
+    await postInvoiceAction({ type: "discard_invoice_proposal", payload: { intakeId, proposalId, role } });
+  }, [postInvoiceAction, role]);
 
-  const batches = useMemo(() => productBatches(state.products, state.settings.demoDate, state.settings.thresholdDays), [state.products, state.settings.demoDate, state.settings.thresholdDays]);
-  const pendingRecommendations = state.recommendations.filter((recommendation) => recommendation.status === "pending");
-  const visibleRecommendations = [...state.recommendations].sort((a, b) => {
-    const pendingOrder = Number(b.status === "pending") - Number(a.status === "pending");
-    if (pendingOrder) return pendingOrder;
-    const milkOrder = Number(b.batchId === "MILK-001") - Number(a.batchId === "MILK-001");
-    if (milkOrder) return milkOrder;
-    return b.createdAt.localeCompare(a.createdAt);
-  });
-  const openTasks = state.tasks.filter((task) => task.status === "open");
-  const totalUnits = state.products.reduce((sum, product) => sum + product.batches.reduce((subtotal, batch) => subtotal + batch.quantity, 0), 0);
-  const activity = [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
-  const selectedTaskRecommendation = selectedTask
-    ? state.recommendations.find(
-        (item) => item.id === selectedTask.recommendationId,
-      )
-    : undefined;
-  const selectedTaskInventory = selectedTask
-    ? taskInventorySummary(selectedTask, selectedTaskRecommendation)
-    : "";
-  const inventoryRows = state.products.flatMap((product) =>
-    product.batches.map((batch) => ({ product, batch })),
+  const groups = useMemo(() => expiryGroups(state.products, referenceDate, thresholdDays), [state.products, referenceDate, thresholdDays]);
+  const allRows = useMemo(() => inventoryRows(state.products), [state.products]);
+  const filteredInventory = useMemo(
+    () => filterInventory(allRows, inventoryQuery, inventoryFilter, referenceDate, thresholdDays),
+    [allRows, inventoryQuery, inventoryFilter, referenceDate, thresholdDays],
   );
-  const filteredInventory = inventoryRows.filter(({ product, batch }) => {
-    const daysUntilExpiry = daysBetween(state.settings.demoDate, batch.expiryDate);
-    const riskMatches =
-      inventoryFilter === "all" ||
-      (inventoryFilter === "expired" && daysUntilExpiry < 0) ||
-      (inventoryFilter === "approaching" &&
-        daysUntilExpiry >= 0 &&
-        daysUntilExpiry <= state.settings.thresholdDays) ||
-      (inventoryFilter === "safe" &&
-        daysUntilExpiry > state.settings.thresholdDays);
-    const haystack = [
-      product.name,
-      product.sku,
-      product.category,
-      product.unit,
-      batch.id,
-      batch.expiryDate,
-    ].join(" ").toLowerCase();
-    return riskMatches && haystack.includes(inventoryQuery.trim().toLowerCase());
-  });
+  const recommendations = useMemo(() => sortRecommendations(state.recommendations), [state.recommendations]);
+  const tasks = useMemo(() => sortTasks(state.tasks), [state.tasks]);
+  const activity = useMemo(() => [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)), [state.activity]);
+  const pendingCount = state.recommendations.filter((recommendation) => recommendation.status === "pending").length;
+  const openTaskCount = state.tasks.filter((task) => task.status === "open").length;
+  const invoiceReviewCount = state.invoiceIntakes.filter((intake) => intake.status === "review").length;
+  const resetAllowed = Boolean(response?.business.simulated) && workspaceHasOnlySyntheticRecords(state);
+  const selectedTaskInventory = selectedTask
+    ? taskInventorySummary(selectedTask, state.recommendations.find((item) => item.id === selectedTask.recommendationId))
+    : "";
+  const storageLabel = response
+    ? response.persistenceMode === "replit_postgres" ? "Saved to Replit PostgreSQL" : "Test-only local storage"
+    : "Connecting to storage…";
 
   function openModal(kind: ModalKind, recommendation?: Recommendation, task?: StaffTask, inventory?: InventorySelection) {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setActionError("");
     setFormError("");
     if (kind === "reject") setRejectReason("");
+    if (kind === "reset") setResetAcknowledged(false);
     if (kind === "complete") {
       setOutcomeType("rotated");
       setOutcomeExplanation("");
@@ -370,26 +263,16 @@ export default function HomePage() {
     if (modal === "edit" && selectedInventory) {
       void sendAction({
         type: "edit_inventory",
-        payload: {
-          productId: selectedInventory.product.id,
-          originalBatchId: selectedInventory.batch.id,
-          batchId,
-          productName,
-          sku,
-          category,
-          unit,
-          quantity,
-          expiryDate,
-        },
-      }, "Inventory batch updated.");
+        payload: { productId: selectedInventory.product.id, originalBatchId: selectedInventory.batch.id, batchId, productName, sku, category, unit, quantity, expiryDate },
+      }, "Inventory record updated.");
       return;
     }
-    void sendAction({ type: "add_inventory", payload: { productName, sku, category, unit, batchId, quantity, expiryDate } }, "Stock batch added to this demo shop.");
+    void sendAction({ type: "add_inventory", payload: { productName, sku, category, unit, batchId, quantity, expiryDate } }, `Stock batch added to ${businessName}.`);
   }
 
   function approveRecommendation() {
     if (!selectedRecommendation) return;
-    void sendAction({ type: "approve", payload: { recommendationId: selectedRecommendation.id, assignedTo: assignee.trim() || "Unassigned", role } }, "Recommendation approved; a staff task is ready.");
+    void sendAction({ type: "approve", payload: { recommendationId: selectedRecommendation.id, assignedTo: assignee.trim() || "Unassigned", role } }, "Recommendation approved; a staff task was created.");
   }
   function rejectRecommendation() {
     if (!selectedRecommendation) return;
@@ -397,272 +280,267 @@ export default function HomePage() {
   }
   function completeTask() {
     if (!selectedTask) return;
-    if (
-      outcomeType === "other" &&
-      outcomeExplanation.trim().length < 3
-    ) {
+    if (outcomeType === "other" && outcomeExplanation.trim().length < 3) {
       setFormError("Explain the Other outcome in at least 3 characters.");
       return;
     }
     void sendAction({
       type: "complete_task",
-      payload: {
-        taskId: selectedTask.id,
-        outcomeType,
-        outcomeExplanation: outcomeExplanation.trim() || undefined,
-        role,
-      },
-    }, "Task marked complete with a staff-reported outcome.");
+      payload: { taskId: selectedTask.id, outcomeType, outcomeExplanation: outcomeExplanation.trim() || undefined, role },
+    }, "Task completed with a staff-reported outcome.");
   }
   function changeThreshold() {
     void sendAction({ type: "set_threshold", payload: { thresholdDays: thresholdDraft } }, "Expiry threshold updated.");
   }
 
-  return <div className="shell">
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark"><Leaf size={18} strokeWidth={2.5} /></span><span className="brand-name">fresh<span>flow</span></span></div>
-      <nav aria-label="Main navigation">
-        <div className="nav-label">Shop operations</div>
-        <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><Activity /><span>Overview</span></button>
-        <button className="nav-item" onClick={() => document.getElementById("inventory-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Package /><span>Inventory</span></button>
-        <button className="nav-item" onClick={() => document.getElementById("tasks-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}><ClipboardList /><span>Staff tasks</span></button>
-      </nav>
-      <div className="side-bottom">
-        <div className="demo-note"><strong>DEMO WORKFLOW</strong>Seed inventory and roles are simulated. Invoice records come from uploaded files. No live stock system is connected.</div>
-        <div className="side-version">FRESHFLOW · DEMO 01</div>
-      </div>
-    </aside>
+  const controlsLocked = busy || modal !== null;
 
-    <main className="main">
+  return <div className="shell">
+    <a className="skip-link" href="#main-content">Skip to content</a>
+    <Sidebar storageLabel={storageLabel} counts={{ decisions: pendingCount, tasks: openTaskCount, invoices: invoiceReviewCount }} />
+
+    <main className="main" id="main-content" tabIndex={-1}>
       <header className="topbar">
-        <div className="crumb">Operations <span> / </span> <b>Today</b></div>
+        <div className="topbar-context">
+          <span className="topbar-label">Workspace</span>
+          <span className="topbar-value">{businessName}</span>
+        </div>
         <div className="top-actions">
-          <div className="business-select">
-            <label htmlFor="business">Demo shop</label>
-            <select
-              id="business"
-              value={businessId}
-              onChange={(event) => changeBusiness(event.target.value)}
-              disabled={busy || modal !== null}
-            >
+          <label className="control">
+            <span className="control-label">Shop</span>
+            <select value={businessId} onChange={(event) => changeBusiness(event.target.value)} disabled={controlsLocked}>
               {(response?.businesses ?? BUSINESS_WORKSPACES).map((business) => (
                 <option key={business.id} value={business.id}>{business.name}</option>
               ))}
             </select>
+          </label>
+          <div className="control" role="group" aria-labelledby="role-view-label">
+            <span className="control-label" id="role-view-label" title="Role views are simulated for this MVP. They are not sign-in or access control.">Role view · simulated</span>
+            <div className="segmented">
+              {(["owner", "staff"] as const).map((value) => (
+                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => setRole(value)} disabled={controlsLocked}>
+                  {value === "owner" ? "Owner" : "Staff"}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="mode-pill" title={response?.persistenceMode === "replit_postgres" ? "Persisted with Replit PostgreSQL" : "Test-only local persistence"}><span className="mode-dot" />{response?.persistenceMode === "replit_postgres" ? "Replit DB" : "Test local"}</div>
-          <div className="role-select"><label htmlFor="role">Demo role</label><select id="role" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={busy || modal !== null}><option value="owner">Owner</option><option value="staff">Staff</option></select><ChevronDown size={12} /></div>
         </div>
       </header>
 
-      <div className="page-heading">
-        <div><div className="eyebrow">Daily shop pulse</div><h1>Inventory operations</h1></div>
-        <div className="date-meta"><Clock3 />Demo date <strong>{dateLabel(state.settings.demoDate)}</strong></div>
+      <div className="page-header" id="overview">
+        <div>
+          <h1>Inventory operations</h1>
+          <p className="page-meta">
+            <span><CalendarDays aria-hidden="true" />Reference date <strong>{dateLabel(referenceDate)}</strong></span>
+            <span>Expiry threshold <strong>{thresholdDays} days</strong></span>
+            <a href="#workspace-data"><Info aria-hidden="true" />Sample data and simulated roles</a>
+          </p>
+        </div>
+        <div className="page-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => void loadState(businessId)} disabled={loading || busy}><RefreshCw aria-hidden="true" className={loading ? "spin" : ""} />Refresh</button>
+          <button type="button" className="btn btn-primary" onClick={() => openModal("add")} disabled={busy || loading || Boolean(loadError)}><Plus aria-hidden="true" />Add stock</button>
+        </div>
       </div>
 
-      <div className="notice"><CircleHelp size={15} /><span><strong>Demo workflow.</strong> Shop and role switching are demonstrations, not authentication or secure access controls. Invoice files and owner-confirmed batches are persisted in Replit PostgreSQL.</span><span className="notice-right">NO LIVE STOCK SYNC</span></div>
-      {actionError && <div className="error-card" role="alert">{actionError}<button className="btn btn-small" onClick={() => setActionError("")} style={{ marginLeft: 12 }}>Dismiss</button></div>}
+      {actionError && <div className="alert alert-danger" role="alert"><AlertTriangle aria-hidden="true" /><span>{actionError}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => setActionError("")}>Dismiss</button></div>}
 
-      {loadError ? <div className="error-card" role="alert">{loadError}<button className="btn btn-small" onClick={() => void loadState(businessId)} style={{ marginLeft: 12 }}><RefreshCw size={13} /> Retry</button></div> : <>
-        <div className="metrics">
-          <div className="metric alert"><div className="metric-label">Expired batches</div><div className="metric-number">{loading ? "—" : batches.expired.length}<small>separate from approaching</small></div></div>
-          <div className="metric warn"><div className="metric-label">Approaching</div><div className="metric-number">{loading ? "—" : batches.approaching.length}<small>within {state.settings.thresholdDays} days</small></div></div>
-          <div className="metric"><div className="metric-label">Open staff tasks</div><div className="metric-number">{loading ? "—" : openTasks.length}<small>{state.tasks.length} total</small></div></div>
-          <div className="metric"><div className="metric-label">Units recorded</div><div className="metric-number">{loading ? "—" : totalUnits}<small>demo + invoice batches</small></div></div>
+      {loadError ? <div className="alert alert-danger" role="alert"><AlertTriangle aria-hidden="true" /><span>{loadError}</span><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadState(businessId)}><RefreshCw aria-hidden="true" />Retry</button></div> : <>
+        <dl className="stats" aria-label="Today's summary">
+          <div className="stat"><dt>Expired batches</dt><dd className={groups.expired.length ? "tone-danger" : ""}>{loading ? "—" : groups.expired.length}</dd><span className="stat-note">Shown separately from approaching</span></div>
+          <div className="stat"><dt>Approaching expiry</dt><dd className={groups.approaching.length ? "tone-warning" : ""}>{loading ? "—" : groups.approaching.length}</dd><span className="stat-note">Within {thresholdDays} days</span></div>
+          <div className="stat"><dt>Awaiting decision</dt><dd>{loading ? "—" : pendingCount}</dd><span className="stat-note">{state.recommendations.length} recommendations total</span></div>
+          <div className="stat"><dt>Open staff tasks</dt><dd>{loading ? "—" : openTaskCount}</dd><span className="stat-note">{state.tasks.length} tasks total</span></div>
+        </dl>
+
+        <div className="grid-2">
+          <Section icon={Gauge} title="Expiry watchlist" description={`Batches expired or due within ${thresholdDays} days of the reference date`} meta={loading ? undefined : groups.expired.length + groups.approaching.length}>
+            {loading ? <LoadingRows label="Loading expiry watchlist" /> : <ExpiryWatchTable
+              referenceDate={referenceDate}
+              thresholdDays={thresholdDays}
+              groups={[
+                { key: "expired", title: "Expired", emptyText: "No expired batches", rows: groups.expired },
+                { key: "approaching", title: "Approaching expiry", emptyText: "No batches approaching expiry", rows: groups.approaching },
+              ]}
+            />}
+          </Section>
+
+          <Section id="decisions" icon={Sparkles} title="Decisions" description={role === "owner" ? "Review each rule-based recommendation, then approve or reject" : "Owner decisions on rule-based recommendations"} meta={loading ? undefined : `${pendingCount} pending`} className="scroll-panel">
+            {loading ? <LoadingRows label="Loading recommendations" /> :
+              recommendations.length ? <div className="list">{recommendations.map((recommendation) => <RecommendationCard key={recommendation.id} recommendation={recommendation} role={role} busy={busy} onApprove={() => openModal("approve", recommendation)} onReject={() => openModal("reject", recommendation)} />)}</div> :
+              <EmptyState title="No recommendations">A batch inside the expiry threshold creates one.</EmptyState>}
+          </Section>
         </div>
 
-        <div className="workspace">
-          <div className="left-stack">
-            <InvoiceIntakePanel
-              businessId={businessId}
-              businessName={response?.business.name ?? "this demo shop"}
-              role={role}
-              products={state.products}
-              intakes={state.invoiceIntakes}
-              busy={busy || loading}
-              onUpload={uploadInvoice}
-              onSaveProposal={saveInvoiceProposal}
-              onConfirmProposal={confirmInvoiceProposal}
-              onDiscardProposal={discardInvoiceProposal}
-            />
-            <Panel id="inventory-panel">
-              <div className="panel-head">
-                <div><div className="panel-title"><Package />Stock by expiry</div><div className="panel-subtitle">Batch-level view · expiry groups are mutually exclusive</div></div>
-                <div className="panel-actions"><button className="btn btn-primary btn-small" onClick={() => openModal("add")}><Plus />Add stock</button></div>
-              </div>
-              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              <div className="stock-wrap">
-                <div className="table-divider" style={{ borderTop: 0 }}>Expired <span>{batches.expired.length} batches</span></div>
-                <div className="stock-head"><span>Product / SKU</span><span>Expiry date</span><span>Quantity</span><span>Risk</span></div>
-                <BatchRows items={batches.expired} demoDate={state.settings.demoDate} />
-                <div className="table-divider" style={{ marginTop: 8 }}>Approaching expiry <span>{batches.approaching.length} batches</span></div>
-                <div className="stock-head"><span>Product / SKU</span><span>Expiry date</span><span>Quantity</span><span>Risk</span></div>
-                <BatchRows items={batches.approaching} demoDate={state.settings.demoDate} />
-                {!state.products.length && <Empty>No products yet. Add a simulated stock batch to get started.</Empty>}
-              </div>}
-            </Panel>
+        <div className="grid-2">
+          <Section id="tasks" icon={ClipboardList} title="Staff tasks" description="Created when an owner approves a recommendation; staff report the outcome" meta={loading ? undefined : `${openTaskCount} open`} className="scroll-panel">
+            {loading ? <LoadingRows label="Loading staff tasks" /> :
+              tasks.length ? <div className="list">{tasks.map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} role={role} busy={busy} onComplete={() => openModal("complete", undefined, task)} />)}</div> :
+              <EmptyState title="No staff tasks">Approve a pending recommendation to create one.</EmptyState>}
+          </Section>
 
-            <Panel>
-              <div className="panel-head inventory-management-head">
-                <div>
-                  <div className="panel-title"><Package />Inventory records</div>
-                  <div className="panel-subtitle">All batches for {response?.business.name ?? "this demo shop"}</div>
-                </div>
-                <div className="inventory-controls">
-                  <label className="inventory-search">
-                    <Search size={14} />
-                    <span className="sr-only">Search inventory</span>
-                    <input
-                      type="search"
-                      value={inventoryQuery}
-                      onChange={(event) => setInventoryQuery(event.target.value)}
-                      placeholder="Search products or batches"
-                    />
-                  </label>
-                  <label>
-                    <span className="sr-only">Filter inventory</span>
-                    <select
-                      value={inventoryFilter}
-                      onChange={(event) => setInventoryFilter(event.target.value as InventoryFilter)}
-                    >
-                      <option value="all">All stock</option>
-                      <option value="expired">Expired</option>
-                      <option value="approaching">Approaching</option>
-                      <option value="safe">No current risk</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-                filteredInventory.length ? <div className="inventory-table-wrap">
-                  <div className="inventory-table-head">
-                    <span>Product</span><span>Batch</span><span>Quantity</span><span>Expiry</span><span>Risk</span><span>Action</span>
-                  </div>
+          <Section id="activity" icon={Activity} title="Activity" description="Newest first · decisions, tasks, inventory and invoice events" meta={loading ? undefined : activity.length} className="scroll-panel">
+            {loading ? <LoadingRows label="Loading activity" /> : <ActivityList events={activity} />}
+          </Section>
+        </div>
+
+        <div id="invoices" className="anchor-section">
+          <InvoiceIntakePanel
+            businessId={businessId}
+            businessName={businessName}
+            role={role}
+            products={state.products}
+            intakes={state.invoiceIntakes}
+            busy={busy || loading}
+            onUpload={uploadInvoice}
+            onSaveProposal={saveInvoiceProposal}
+            onConfirmProposal={confirmInvoiceProposal}
+            onDiscardProposal={discardInvoiceProposal}
+          />
+        </div>
+
+        <Section
+          id="inventory"
+          icon={Package}
+          title="Inventory"
+          description={`All product batches for ${businessName}`}
+          meta={loading ? undefined : `${filteredInventory.length} of ${allRows.length}`}
+          actions={<div className="toolbar">
+            <label className="search-field">
+              <Search aria-hidden="true" />
+              <span className="sr-only">Search inventory</span>
+              <input type="search" value={inventoryQuery} onChange={(event) => setInventoryQuery(event.target.value)} placeholder="Search product, SKU or batch" />
+            </label>
+            <label className="select-field">
+              <span className="sr-only">Filter by expiry status</span>
+              <select value={inventoryFilter} onChange={(event) => setInventoryFilter(event.target.value as InventoryFilter)}>
+                <option value="all">All statuses</option>
+                <option value="expired">Expired</option>
+                <option value="approaching">Approaching</option>
+                <option value="safe">No current risk</option>
+              </select>
+            </label>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => openModal("add")} disabled={busy || loading}><Plus aria-hidden="true" />Add stock</button>
+          </div>}
+        >
+          {loading ? <LoadingRows label="Loading inventory" rows={4} /> :
+            filteredInventory.length ? <div className="table-scroll">
+              <table className="data-table">
+                <caption className="sr-only">Inventory batches</caption>
+                <thead><tr><th scope="col">Product</th><th scope="col">Batch</th><th scope="col" className="num">Quantity</th><th scope="col">Expiry</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+                <tbody>
                   {filteredInventory.map(({ product, batch }) => {
-                    const days = daysBetween(state.settings.demoDate, batch.expiryDate);
-                    const riskClass = days < 0 ? "risk-expired" : days <= state.settings.thresholdDays ? "risk-approaching" : "risk-safe";
-                    const riskLabel = days < 0 ? "Expired" : days <= state.settings.thresholdDays ? `${days}d left` : "No current risk";
-                    return <div className="inventory-table-row" key={`${product.id}-${batch.id}`}>
-                      <div><b>{product.name}</b><small>{product.sku} · {product.category}</small></div>
-                      <span className="batch-date">{batch.id}</span>
-                      <span className="qty">{batch.quantity} {product.unit}</span>
-                      <span className="batch-date">{dateLabel(batch.expiryDate)}</span>
-                      <span><span className={`risk-tag ${riskClass}`}>{riskLabel}</span></span>
-                      <button className="btn btn-small" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy}><Pencil />Edit</button>
-                    </div>;
+                    const risk = batchRisk(referenceDate, batch.expiryDate, thresholdDays);
+                    return <tr key={`${product.id}-${batch.id}`}>
+                      <td data-label="Product"><div className="cell-primary">{product.name}</div><div className="cell-secondary">{product.sku} · {product.category}</div></td>
+                      <td data-label="Batch" className="mono">{batch.id}</td>
+                      <td data-label="Quantity" className="num mono">{batch.quantity} {product.unit}</td>
+                      <td data-label="Expiry">{dateLabel(batch.expiryDate)}</td>
+                      <td data-label="Status"><StatusBadge tone={risk.tone}>{risk.label}</StatusBadge></td>
+                      <td className="row-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Edit ${product.name} batch ${batch.id}`}><Pencil aria-hidden="true" />Edit</button></td>
+                    </tr>;
                   })}
-                </div> : <Empty>{inventoryRows.length ? "No inventory matches these search and filter settings." : "This demo shop has no inventory yet. Add a batch to get started."}</Empty>}
-            </Panel>
+                </tbody>
+              </table>
+            </div> : allRows.length ? <EmptyState title="No matching batches">Adjust the search or status filter.</EmptyState> : <EmptyState title="No inventory yet">Add a stock batch or confirm an invoice line to get started.</EmptyState>}
+        </Section>
 
-            <Panel>
-              <div className="panel-head">
-                <div><div className="panel-title"><SlidersHorizontal />Expiry rule</div><div className="panel-subtitle">Flag batches due within this many days</div></div>
-                <div className="threshold"><input aria-label="Expiry threshold days" type="range" min="1" max="14" value={thresholdDraft} onChange={(event) => setThresholdDraft(Number(event.target.value))} /><span className="threshold-output">{thresholdDraft}d</span><button className="btn btn-small" onClick={changeThreshold} disabled={busy || thresholdDraft === state.settings.thresholdDays}>Save rule</button></div>
+        <Section id="settings" icon={Settings2} title="Settings & data" description="Expiry rule, workspace information and data reset">
+          <div className="settings-grid">
+            <div className="settings-block">
+              <h3 className="block-title"><SlidersHorizontal aria-hidden="true" />Expiry rule</h3>
+              <p className="block-text">A batch is approaching when it expires on or after the reference date and within the threshold. Expired stock is listed separately and is not counted as approaching.</p>
+              <div className="threshold">
+                <label htmlFor="threshold-days" className="field-label">Threshold</label>
+                <input id="threshold-days" type="range" min="1" max="14" value={thresholdDraft} onChange={(event) => setThresholdDraft(Number(event.target.value))} disabled={busy} />
+                <output htmlFor="threshold-days" className="threshold-output">{thresholdDraft} {thresholdDraft === 1 ? "day" : "days"}</output>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={changeThreshold} disabled={busy || thresholdDraft === thresholdDays}>Save rule</button>
               </div>
-              <div className="recommendation" style={{ paddingTop: 13, paddingBottom: 14 }}>
-                <div className="explain-text">A batch is approaching when its expiry falls on or after the demo date and within the selected threshold. Expired stock is shown separately and is not counted as approaching.</div>
-              </div>
-            </Panel>
+            </div>
+
+            <div className="settings-block" id="workspace-data">
+              <h3 className="block-title"><Info aria-hidden="true" />About this workspace</h3>
+              <ul className="facts">
+                <li><strong>Sample shops.</strong> Seed products, batches and staff names are synthetic. Uploaded invoices and owner-confirmed batches are stored as real records.</li>
+                <li><strong>Simulated roles.</strong> The shop selector and Owner/Staff view are not sign-in or access control.</li>
+                <li><strong>Reference date.</strong> Expiry is calculated against the configured date shown above, not today&apos;s calendar date.</li>
+                <li><strong>Storage.</strong> {storageLabel}. There is no live POS or stock-system sync; completing a task never changes quantities.</li>
+              </ul>
+            </div>
           </div>
 
-          <div className="right-stack">
-            <Panel>
-              <div className="panel-head"><div><div className="panel-title"><Sparkles />Owner decisions</div><div className="panel-subtitle">{pendingRecommendations.length} awaiting a decision</div></div><span className="small-mono">SIMULATED</span></div>
-              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              visibleRecommendations.length ? visibleRecommendations.map((recommendation) => <RecommendationCard key={recommendation.id} recommendation={recommendation} role={role} busy={busy} onApprove={() => openModal("approve", recommendation)} onReject={() => openModal("reject", recommendation)} />) :
-              <div className="recommendation"><Empty>No recommendations yet. An approaching batch may create one.</Empty></div>}
-            </Panel>
-
-            <Panel id="tasks-panel">
-              <div className="panel-head"><div><div className="panel-title"><ClipboardList />Staff work</div><div className="panel-subtitle">Approval creates a task; staff reports completion</div></div><span className="small-mono">{openTasks.length} OPEN</span></div>
-              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              state.tasks.length ? <div className="tasks-list">{[...state.tasks].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} role={role} busy={busy} onComplete={() => openModal("complete", undefined, task)} />)}</div> : <div className="recommendation"><Empty>No staff tasks. Approve a pending recommendation to create one.</Empty></div>}
-            </Panel>
-
-            <Panel>
-              <div className="panel-head"><div><div className="panel-title"><Activity />Activity log</div><div className="panel-subtitle">Newest events · demo actions and invoice decisions</div></div><span className="small-mono">{activity.length} EVENTS</span></div>
-              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              activity.length ? <div className="activity">{activity.map((event) => <div className="event" key={event.id}><div className="event-title">{event.title}</div><div className="event-desc">{event.description}</div><div className="event-meta"><span>{activityActorLabel(event.actor)}</span>{event.batchId && <span>Batch {event.batchId}</span>}{event.recommendationId && <span>Recommendation linked</span>}{event.taskId && <span title={event.taskId}>Task linked</span>}<time dateTime={event.occurredAt}>{dateTimeLabel(event.occurredAt)}</time></div></div>)}</div> : <div className="recommendation"><Empty>No activity recorded yet.</Empty></div>}
-            </Panel>
+          <div className="danger-zone">
+            <div>
+              <h3 className="block-title"><ShieldAlert aria-hidden="true" />Reset sample data</h3>
+              <p className="block-text">
+                {resetAllowed
+                  ? `Restores ${businessName} to its starting sample data and clears its activity history. Other shops are not affected.`
+                  : `Unavailable for ${businessName}: it contains uploaded invoices or other non-sample records, which reset never removes.`}
+              </p>
+            </div>
+            <button type="button" className="btn btn-danger-outline btn-sm" onClick={() => openModal("reset")} disabled={busy || loading || !resetAllowed}><RotateCcw aria-hidden="true" />Reset sample data…</button>
           </div>
-        </div>
+        </Section>
       </>}
-
-      <div className="footer-actions" style={{ justifyContent: "space-between", marginTop: 17 }}>
-        <span className="small-mono">State syncs after each action</span>
-        <div className="footer-actions"><button className="btn btn-small btn-quiet" onClick={() => void loadState(businessId)} disabled={loading || busy}><RefreshCw />Refresh state</button><button className="btn btn-small btn-quiet" onClick={() => openModal("reset")} disabled={busy}><RotateCcw />Reset demo</button></div>
-      </div>
     </main>
 
-    {modal && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setModal(null); }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-        <div className="dialog-head"><div>
-          <h2 id="dialog-title">{modal === "add" ? "Add a stock batch" : modal === "edit" ? "Edit inventory record" : modal === "approve" ? "Approve recommendation" : modal === "reject" ? "Reject recommendation" : modal === "complete" ? "Report task outcome" : "Reset demo data"}</h2>
-          <p className="dialog-intro">{modal === "add" ? `Add synthetic inventory to ${response?.business.name ?? "this demo shop"}.` : modal === "edit" ? "Update this product and batch in the selected demo shop. Related expiry risks are recalculated." : modal === "approve" ? "Approval creates a staff task. Assign it to a simulated team member." : modal === "reject" ? "Record an owner decision for this simulated recommendation." : modal === "complete" ? "Record what staff report doing. Completing a task does not adjust stock quantity." : `Restore the initial synthetic data for ${response?.business.name ?? "this demo shop"} only.`}</p>
-        </div><button className="icon-btn" aria-label="Close dialog" onClick={() => setModal(null)} disabled={busy}><X /></button></div>
+    {modal && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) closeModal(); }}>
+      <div className={`dialog ${modal === "reset" ? "dialog-danger" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-intro" ref={dialogRef} tabIndex={-1}>
+        <div className="dialog-head">
+          <div>
+            <h2 id="dialog-title">{DIALOG_TITLES[modal]}</h2>
+            <p className="dialog-intro" id="dialog-intro">{modal === "add" ? `Add a product batch to ${businessName}.` : modal === "edit" ? "Update this product and batch. Related expiry risks are recalculated." : modal === "approve" ? "Approval creates one staff task linked to this recommendation." : modal === "reject" ? "Record the owner decision. No task is created." : modal === "complete" ? "Record what staff reported. Completing a task does not adjust stock quantity." : `This affects ${businessName} only.`}</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Close dialog" onClick={closeModal} disabled={busy}><X aria-hidden="true" /></button>
+        </div>
 
-        {(modal === "add" || modal === "edit") && <form onSubmit={submitInventory}>
+        {(modal === "add" || modal === "edit") && <form onSubmit={submitInventory} noValidate>
           <div className="form-grid">
             <div className="field"><label htmlFor="productName">Product name</label><input id="productName" name="productName" required defaultValue={selectedInventory?.product.name} placeholder="e.g. Fresh milk" /></div>
             <div className="field"><label htmlFor="sku">SKU</label><input id="sku" name="sku" required defaultValue={selectedInventory?.product.sku} placeholder="e.g. MILK" /></div>
-            <div className="field"><label htmlFor="category">Category</label><input id="category" name="category" required defaultValue={selectedInventory?.product.category} placeholder="Dairy" /></div>
-            <div className="field"><label htmlFor="unit">Unit</label><input id="unit" name="unit" required defaultValue={selectedInventory?.product.unit} placeholder="bottles" /></div>
+            <div className="field"><label htmlFor="category">Category</label><input id="category" name="category" required defaultValue={selectedInventory?.product.category} placeholder="e.g. Dairy" /></div>
+            <div className="field"><label htmlFor="unit">Unit</label><input id="unit" name="unit" required defaultValue={selectedInventory?.product.unit} placeholder="e.g. bottles" /></div>
             <div className="field"><label htmlFor="batchId">Batch ID</label><input id="batchId" name="batchId" required defaultValue={selectedInventory?.batch.id} placeholder="e.g. MILK-003" /></div>
             <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" required type="number" min={modal === "edit" ? "0.000001" : "1"} max="100000" step={modal === "edit" ? "any" : "1"} inputMode="decimal" defaultValue={selectedInventory?.batch.quantity} placeholder="24" /></div>
             <div className="field full"><label htmlFor="expiryDate">Expiry date</label><input id="expiryDate" name="expiryDate" required type="date" defaultValue={selectedInventory?.batch.expiryDate} /></div>
           </div>
-          {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button type="button" className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle /> : modal === "edit" ? <Check /> : <Plus />}{modal === "edit" ? "Save changes" : "Add batch"}</button></div>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : modal === "edit" ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}{modal === "edit" ? "Save changes" : "Add batch"}</button></div>
         </form>}
+
         {modal === "approve" && <div>
-          {selectedRecommendation && <div className="explain-box"><div className="explain-label">Recommendation</div><div className="explain-text"><strong>{selectedRecommendation.productName}</strong> · {selectedRecommendation.quantity} {selectedRecommendation.unit} · expires {dateLabel(selectedRecommendation.expiryDate)}<br />{selectedRecommendation.suggestedAction}</div></div>}
-          <div className="field" style={{ marginTop: 15 }}><label htmlFor="assignee">Assign task to</label><select id="assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Aina</option><option>Ravi</option><option>Mei Ling</option><option>Unassigned</option></select></div>
-          {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" onClick={approveRecommendation} disabled={busy}>{busy ? <LoaderCircle /> : <Check />}Approve &amp; create task</button></div>
+          {selectedRecommendation && <div className="summary-box"><div className="summary-title">{selectedRecommendation.productName}</div><div className="summary-meta mono">{selectedRecommendation.quantity} {selectedRecommendation.unit} · Batch {selectedRecommendation.batchId} · Expires {dateLabel(selectedRecommendation.expiryDate)}</div><p>{selectedRecommendation.suggestedAction}</p></div>}
+          <div className="field"><label htmlFor="assignee">Assign task to</label><select id="assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Aina</option><option>Ravi</option><option>Mei Ling</option><option>Unassigned</option></select><span className="field-hint">Staff names are sample team members.</span></div>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button type="button" className="btn btn-primary" onClick={approveRecommendation} disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Check aria-hidden="true" />}Approve &amp; create task</button></div>
         </div>}
+
         {modal === "reject" && <div>
-          <div className="field"><label htmlFor="rejectReason">Reason (optional)</label><textarea id="rejectReason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Add context for the activity record" /></div>
-          {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-danger" onClick={rejectRecommendation} disabled={busy}>{busy ? <LoaderCircle /> : <XCircle />}Reject recommendation</button></div>
+          {selectedRecommendation && <div className="summary-box"><div className="summary-title">{selectedRecommendation.productName}</div><div className="summary-meta mono">Batch {selectedRecommendation.batchId} · Expires {dateLabel(selectedRecommendation.expiryDate)}</div></div>}
+          <div className="field"><label htmlFor="rejectReason">Reason <span className="optional">(optional)</span></label><textarea id="rejectReason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Added to the activity record" /></div>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button type="button" className="btn btn-danger" onClick={rejectRecommendation} disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <XCircle aria-hidden="true" />}Reject recommendation</button></div>
         </div>}
+
         {modal === "complete" && <div>
-          <div className="explain-box"><div className="explain-label">Task · {selectedTask?.assignedTo}</div>{selectedTaskInventory && <div className="task-inventory">{selectedTaskInventory}</div>}<div className="explain-text">{selectedTask?.instruction}</div></div>
-          <div className="field" style={{ marginTop: 15 }}><label htmlFor="outcomeType">Staff-reported outcome</label><select id="outcomeType" value={outcomeType} onChange={(event) => { setOutcomeType(event.target.value as TaskOutcomeType); setOutcomeExplanation(""); }}>{Object.entries(TASK_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+          <div className="summary-box"><div className="summary-title">{selectedTask?.title}</div>{selectedTaskInventory && <div className="summary-meta mono">{selectedTaskInventory}</div>}<p>{selectedTask?.instruction}</p><div className="summary-meta">Assigned to {selectedTask?.assignedTo}</div></div>
+          <div className="field"><label htmlFor="outcomeType">Staff-reported outcome</label><select id="outcomeType" value={outcomeType} onChange={(event) => { setOutcomeType(event.target.value as TaskOutcomeType); setOutcomeExplanation(""); }}>{Object.entries(TASK_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
           {outcomeType === "other" && <div className="field"><label htmlFor="outcomeExplanation">Explain the Other outcome</label><textarea id="outcomeExplanation" value={outcomeExplanation} onChange={(event) => setOutcomeExplanation(event.target.value)} minLength={3} maxLength={500} required placeholder="Describe what staff reported" /></div>}
-          <div className="decision-note"><AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />This is a simulated staff report only. No quantity adjustment is made.</div>
-          {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" onClick={completeTask} disabled={busy}>{busy ? <LoaderCircle /> : <Check />}Save reported outcome</button></div>
+          <p className="field-hint"><Info aria-hidden="true" />This records a report only. No stock quantity is adjusted.</p>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button type="button" className="btn btn-primary" onClick={completeTask} disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Check aria-hidden="true" />}Save outcome</button></div>
         </div>}
+
         {modal === "reset" && <div>
-          <div className="explain-box"><div className="explain-text">This resets only the selected demo shop to its initial synthetic setup. Its simulated changes and event history will be cleared. Reset is refused if that shop contains non-demo records.</div></div>
-          {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Keep current state</button><button className="btn btn-danger" onClick={() => void sendAction({ type: "reset" }, "Demo reset to its initial state.")} disabled={busy}>{busy ? <LoaderCircle /> : <RotateCcw />}Reset demo</button></div>
+          <div className="alert alert-danger compact"><AlertTriangle aria-hidden="true" /><span>All products, batches, recommendations, tasks and activity for <strong>{businessName}</strong> will be replaced with the starting sample data. This cannot be undone. The server refuses the reset if the shop contains uploaded invoices or other non-sample records.</span></div>
+          <label className="checkbox"><input type="checkbox" checked={resetAcknowledged} onChange={(event) => setResetAcknowledged(event.target.checked)} />I understand that {businessName}&apos;s current sample data and history will be cleared.</label>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy} data-autofocus>Keep current data</button><button type="button" className="btn btn-danger" onClick={() => void sendAction({ type: "reset" }, `${businessName} reset to its starting sample data.`)} disabled={busy || !resetAcknowledged}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <RotateCcw aria-hidden="true" />}Reset sample data</button></div>
         </div>}
       </div>
     </div>}
-    {toast && <div className={`toast ${toastError ? "error" : ""}`} role="status">{toastError ? <AlertTriangle size={14} style={{ verticalAlign: "middle", marginRight: 7 }} /> : <CheckCircle2 size={14} style={{ verticalAlign: "middle", marginRight: 7 }} />}{toast}</div>}
-  </div>;
-}
 
-function RecommendationCard({ recommendation, role, busy, onApprove, onReject }: { recommendation: Recommendation; role: Role; busy: boolean; onApprove: () => void; onReject: () => void }) {
-  return <div className="recommendation">
-    <div className="rec-top"><div><div className="rec-product">{recommendation.productName}</div><div className="rec-quantity">{recommendation.sku} · {recommendation.quantity} {recommendation.unit} · expires {dateLabel(recommendation.expiryDate)}</div></div><span className="rec-status">{recommendation.status}</span></div>
-    {recommendation.batchId === "MILK-001" && recommendation.expiryDate === "2026-10-25" && <div className="explain-box"><div className="explain-label">Why this batch is flagged</div><div className="explain-text">MILK-001 · 8 bottles · expires 25 Oct 2026. Demo date: 24 Oct 2026. The expiry rule flags it as approaching because it expires within the configured {recommendation.daysUntilExpiry < 0 ? "threshold" : "threshold window"} ({recommendation.daysUntilExpiry} day{recommendation.daysUntilExpiry === 1 ? "" : "s"} away).</div></div>}
-    <div className="explain-box"><div className="explain-label">Rule explanation</div><div className="explain-text">{recommendation.explanation}</div></div>
-    <div className="suggestion"><ArrowDownRight /><div><div className="explain-label">Suggested action</div>{recommendation.suggestedAction}</div></div>
-    {recommendation.status === "pending" && role === "owner" && <div className="rec-actions"><button className="btn btn-leaf btn-small" onClick={onApprove} disabled={busy}><Check />Approve &amp; assign</button><button className="btn btn-small btn-danger" onClick={onReject} disabled={busy}><XCircle />Reject</button></div>}
-    {recommendation.status === "pending" && role === "staff" && <div className="decision-note">Owner decision controls are shown in Owner demo role.</div>}
-    {recommendation.status !== "pending" && <div className="decision-note">{recommendation.status === "approved" ? "Approved" : "Rejected"}{recommendation.decisionBy ? ` by ${recommendation.decisionBy}` : ""}{recommendation.decisionAt ? ` · ${dateTimeLabel(recommendation.decisionAt)}` : ""}</div>}
-  </div>;
-}
-
-function TaskRow({ task, recommendation, role, busy, onComplete }: { task: StaffTask; recommendation?: Recommendation; role: Role; busy: boolean; onComplete: () => void }) {
-  const inventoryDetails = taskInventorySummary(task, recommendation);
-  return <div className="task">
-    <div className="task-line"><div className="task-name">{task.title}</div><div className="task-owner">{task.assignedTo}</div></div>
-    {inventoryDetails && <div className="task-inventory">{inventoryDetails}</div>}
-    <div className="task-instruction">{task.instruction}</div>
-    <div className="task-foot"><span className={`task-state ${task.status === "completed" ? "done" : ""}`}>{task.status}</span>{task.status === "open" && role === "staff" && <button className="btn btn-small" onClick={onComplete} disabled={busy}><Check />Report done</button>}{task.status === "open" && role === "owner" && <span className="task-owner">Switch to Staff to report</span>}</div>
-    {task.status === "completed" && task.outcome && <div className="reported"><b>Staff-reported outcome · no quantity adjustment</b>{task.outcome}{task.outcomeExplanation && task.outcomeType !== "other" && <span className="reported-detail">{task.outcomeExplanation}</span>}</div>}
+    <div className="toast-region" aria-live="polite">
+      {toast && <div className={`toast ${toastError ? "error" : ""}`} role="status">{toastError ? <AlertTriangle aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}{toast}</div>}
+    </div>
   </div>;
 }

@@ -191,7 +191,7 @@ export function InvoiceIntakePanel({
     setLocalBusy("upload");
     try {
       await onUpload(file);
-      setFeedback(`${file.name} sent for invoice review.`);
+      setFeedback(`${file.name} uploaded. Review the extracted lines below.`);
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : "Upload could not be completed.");
     } finally {
@@ -231,7 +231,7 @@ export function InvoiceIntakePanel({
         matchMode: draft.matchMode,
         matchedProductId: draft.matchMode === "existing" ? draft.matchedProductId : null,
       });
-      setFeedback("Proposal confirmed by owner. Inventory changes are handled by the dashboard.");
+      setFeedback("Line confirmed. A stock batch was added to inventory.");
     } catch (error) {
       setValidation((current) => ({ ...current, [key]: error instanceof Error ? error.message : "Could not confirm this proposal." }));
     } finally {
@@ -262,7 +262,7 @@ export function InvoiceIntakePanel({
               <ReceiptText aria-hidden="true" />
               <h2 className={styles.title} id={`${inputId}-title`}>Invoice intake</h2>
             </div>
-            <p className={styles.subtitle}>Upload a supplier invoice for review · {businessName}</p>
+            <p className={styles.subtitle}>Extract invoice lines into proposals for owner review · {businessName}</p>
           </div>
           <span className={styles.headerCount}>{intakes.length} {intakes.length === 1 ? "file" : "files"}</span>
         </header>
@@ -270,8 +270,8 @@ export function InvoiceIntakePanel({
         <div className={styles.uploadArea}>
           <span className={styles.uploadIcon}><FileUp aria-hidden="true" /></span>
           <div className={styles.uploadCopy}>
-            <div className={styles.uploadTitle}>Bring in a supplier invoice</div>
-          <div className={styles.uploadHint}>PDF or CSV · Text-based PDFs only; scanned image PDFs are not supported.</div>
+            <div className={styles.uploadTitle}>Upload a supplier invoice</div>
+            <div className={styles.uploadHint}>PDF or CSV. Text-based PDFs only; scanned image PDFs are not supported.</div>
           </div>
           <input
             ref={fileInput}
@@ -288,14 +288,14 @@ export function InvoiceIntakePanel({
             {localBusy === "upload" ? "Uploading…" : "Choose invoice"}
           </label>
         </div>
-        {uploadError && <div className={styles.validation} role="alert" style={{ margin: "8px 17px 0" }}><AlertTriangle />{uploadError}</div>}
+        {uploadError && <div className={`${styles.validation} ${styles.uploadError}`} role="alert"><AlertTriangle aria-hidden="true" />{uploadError}</div>}
         <div className={styles.notice}>
           <CircleHelp aria-hidden="true" />
-          <span><strong>No stock changes happen on upload.</strong> Extracted values may be incomplete or ambiguous; only an owner can verify each line and confirm a stock change.</span>
+          <span><strong>Uploading never changes stock.</strong> Extracted values may be incomplete or ambiguous. An owner verifies each line and confirms any stock change.</span>
         </div>
 
         {feedback && <div className={styles.toast} role="status"><CheckCircle2 aria-hidden="true" />{feedback}</div>}
-        {busy && <div className={styles.busyNote} style={{ margin: "0 17px 10px" }}><LoaderCircle aria-hidden="true" />Dashboard action in progress…</div>}
+        {busy && intakes.length > 0 && <div className={styles.busyNote} role="status"><LoaderCircle aria-hidden="true" />Updating…</div>}
 
         {busy && intakes.length === 0 ? (
           <div className={styles.loading} aria-label="Loading invoice intakes" aria-busy="true">
@@ -313,8 +313,8 @@ export function InvoiceIntakePanel({
                       <div className={styles.uploadedAt}>{formatUploaded(intake.uploadedAt)} · {intake.proposals.length} {intake.proposals.length === 1 ? "line" : "lines"}</div>
                     </div>
                   </div>
-                  <a className={styles.fileLink} href={`/api/invoices/${encodeURIComponent(intake.id)}/file?businessId=${encodeURIComponent(businessId)}`}>
-                    Original
+                  <a className={styles.fileLink} aria-label={`Download original file ${intake.fileName}`} href={`/api/invoices/${encodeURIComponent(intake.id)}/file?businessId=${encodeURIComponent(businessId)}`}>
+                    Download original
                   </a>
                   <span className={`${styles.status} ${intake.status === "completed" ? styles.statusComplete : ""}`}>
                     {intake.status === "completed" ? <CheckCircle2 aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
@@ -341,10 +341,10 @@ export function InvoiceIntakePanel({
                         <article className={styles.proposal} key={proposal.id}>
                           <div className={styles.proposalTop}>
                             <div className={styles.productHeading}>
-                              <div className={dataClass(proposal.productName)}>{display(proposal.productName)}</div>
+                              <h3 className={dataClass(proposal.productName)}>{display(proposal.productName)}</h3>
                               <div className={styles.productSku}>{proposal.sku ? `SKU ${proposal.sku}` : "SKU not found"} · {proposal.category || "Category not found"}</div>
                             </div>
-                            <span className={styles.unverified}>{proposal.status === "confirmed" ? "Owner confirmed" : proposal.status === "discarded" ? "Discarded" : "Unverified"}</span>
+                            <span className={`${styles.unverified} ${proposal.status === "pending" ? styles.unverifiedPending : proposal.status === "confirmed" ? styles.unverifiedConfirmed : ""}`}>{proposal.status === "confirmed" ? "Owner confirmed" : proposal.status === "discarded" ? "Discarded" : "Unverified"}</span>
                           </div>
                           <div className={styles.proposalBody}>
                             <div className={styles.dataGrid}>
@@ -361,7 +361,7 @@ export function InvoiceIntakePanel({
                             )}
                             {canEdit && isPending ? (
                               <div className={styles.matchArea}>
-                                <p className={styles.matchTitle}>Product destination · choose explicitly</p>
+                                <p className={styles.matchTitle}>Product destination (required)</p>
                                 <div className={styles.matchOptions}>
                                   <label className={styles.radioLabel}>
                                     <input type="radio" name={`match-${inputId}-${key}`} checked={draft.matchMode === "existing"} onChange={() => patchDraft(intake.id, proposal, { matchMode: "existing", matchedProductId: draft.matchedProductId || proposal.matchedProductId || "" })} />
@@ -402,7 +402,7 @@ export function InvoiceIntakePanel({
                                 </div>
                                 {validation[key] && <div className={styles.validation} role="alert"><AlertTriangle aria-hidden="true" />{validation[key]}</div>}
                                 <div className={styles.cardActions}>
-                                  <span className={styles.reviewHint}>Save keeps this as a proposal. Confirm is an owner decision.</span>
+                                  <span className={styles.reviewHint}>Saving keeps this as an unconfirmed proposal. Confirming adds the batch to inventory.</span>
                                   <button type="button" className={`${styles.button} ${styles.quiet}`} onClick={() => void saveProposal(intake.id, proposal)} disabled={actionBusy}>
                                     <Save aria-hidden="true" />Save edits
                                   </button>
@@ -417,10 +417,10 @@ export function InvoiceIntakePanel({
                             ) : (
                               <div className={styles.readOnly}>
                                 {proposal.status === "pending"
-                                  ? "Staff view: invoice lines are read-only. An owner must verify and decide whether to match or create a product."
+                                  ? "Read-only in the Staff view. An owner verifies this line and chooses whether to match an existing product or create a new one."
                                   : proposal.status === "confirmed"
                                     ? `Owner confirmed this line as ${proposal.matchedProductId ? "an existing product" : "a new product"}; a batch was added to inventory.`
-                                    : "This proposal was discarded; it will not be sent for owner confirmation."}
+                                    : "Discarded. This line was not added to inventory."}
                               </div>
                             )}
                           </div>

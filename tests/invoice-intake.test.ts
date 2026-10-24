@@ -216,7 +216,7 @@ describe("invoice review and confirmation", () => {
         matchMode: "new",
         role: "staff",
       },
-    })).rejects.toThrow("Owner demo role");
+    })).rejects.toThrow("Owner role view");
     expect((await getCurrentState()).state.products.some((product) => product.sku === line.sku)).toBe(false);
 
     const confirmed = await dispatchAction({
