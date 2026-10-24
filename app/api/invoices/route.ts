@@ -4,6 +4,8 @@ import { getBusinessWorkspace } from "@/src/lib/businesses";
 import { extractInvoice } from "@/src/lib/invoice-extraction";
 import { createInvoiceIntake } from "@/src/lib/store";
 import type { InvoiceIntake } from "@/src/lib/types";
+import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
+import { roleFromRequest } from "@/src/lib/role-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +24,7 @@ function safeFileName(value: string): string {
 
 export async function POST(request: Request) {
   try {
+    requireActionPermission(roleFromRequest(request), "upload_invoice");
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > MAX_INVOICE_BYTES + 65_536) {
       return NextResponse.json({ error: "Invoice must be 5 MB or smaller." }, { status: 413 });
@@ -80,6 +83,8 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invoice upload could not be completed.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, {
+      status: error instanceof AccessDeniedError ? 403 : 400,
+    });
   }
 }

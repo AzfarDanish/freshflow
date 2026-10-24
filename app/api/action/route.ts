@@ -4,6 +4,8 @@ import {
   getBusinessWorkspace,
 } from "@/src/lib/businesses";
 import { dispatchAction } from "@/src/lib/store";
+import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
+import { roleFromRequest } from "@/src/lib/role-session";
 import {
   TASK_OUTCOME_TYPES,
   type InvoiceProposalInput,
@@ -76,15 +78,6 @@ function invoiceFields(value: unknown): InvoiceProposalInput {
   };
 }
 
-function demoRole(
-  value: unknown,
-  defaultRole: "owner" | "staff",
-): "owner" | "staff" {
-  if (value === undefined) return defaultRole;
-  if (value === "owner" || value === "staff") return value;
-  throw new Error("Choose the Owner or Staff role view.");
-}
-
 function isValidDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
@@ -93,7 +86,7 @@ function isValidDate(value: unknown): value is string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-function parseAction(input: unknown): InventoryAction {
+function parseAction(input: unknown, role: "owner" | "staff"): InventoryAction {
   if (!isRecord(input) || typeof input.type !== "string") {
     throw new Error("Send a valid FreshFlow action.");
   }
@@ -161,6 +154,18 @@ function parseAction(input: unknown): InventoryAction {
         },
       };
     }
+    case "delete_inventory":
+      if (payload.confirmed !== true) {
+        throw new Error("Confirm deletion of this inventory batch before continuing.");
+      }
+      return {
+        type: "delete_inventory",
+        payload: {
+          productId: text(payload.productId, "Product", 100),
+          batchId: text(payload.batchId, "Batch ID", 60),
+          confirmed: true,
+        },
+      };
     case "edit_invoice_proposal":
       return {
         type: "edit_invoice_proposal",
@@ -168,7 +173,7 @@ function parseAction(input: unknown): InventoryAction {
           intakeId: text(payload.intakeId, "Invoice", 100),
           proposalId: text(payload.proposalId, "Invoice line", 100),
           fields: invoiceFields(payload.fields),
-          role: demoRole(payload.role, "owner"),
+          role,
         },
       };
     case "confirm_invoice_proposal": {
@@ -183,7 +188,7 @@ function parseAction(input: unknown): InventoryAction {
           proposalId: text(payload.proposalId, "Invoice line", 100),
           fields: invoiceFields(payload.fields),
           matchMode,
-          role: demoRole(payload.role, "owner"),
+          role,
         },
       };
     }
@@ -193,7 +198,7 @@ function parseAction(input: unknown): InventoryAction {
         payload: {
           intakeId: text(payload.intakeId, "Invoice", 100),
           proposalId: text(payload.proposalId, "Invoice line", 100),
-          role: demoRole(payload.role, "owner"),
+          role,
         },
       };
     case "set_threshold": {
@@ -214,7 +219,7 @@ function parseAction(input: unknown): InventoryAction {
         payload: {
           recommendationId: text(payload.recommendationId, "Recommendation", 100),
           assignedTo: text(payload.assignedTo, "Assignee", 60),
-          role: demoRole(payload.role, "owner"),
+          role,
         },
       };
     case "reject":
@@ -223,7 +228,7 @@ function parseAction(input: unknown): InventoryAction {
         payload: {
           recommendationId: text(payload.recommendationId, "Recommendation", 100),
           reason: optionalText(payload.reason, "Rejection reason", 250),
-          role: demoRole(payload.role, "owner"),
+          role,
         },
       };
     case "complete_task": {
@@ -251,7 +256,7 @@ function parseAction(input: unknown): InventoryAction {
           taskId: text(payload.taskId, "Task", 100),
           outcomeType: outcomeType as TaskOutcomeType,
           outcomeExplanation,
-          role: demoRole(payload.role, "staff"),
+          role,
         },
       };
     }
@@ -284,13 +289,20 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const action = parseAction(actionEnvelope);
-    return NextResponse.json(await dispatchAction(action, businessId), {
+    const role = roleFromRequest(request);
+    const action = parseAction(actionEnvelope, role);
+    requireActionPermission(role, action.type);
+    return NextResponse.json(await dispatchAction(action, businessId, role), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "That action could not be saved.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    const status = error instanceof AccessDeniedError
+      ? 403
+      : message.includes("SESSION_SECRET")
+        ? 503
+        : 400;
+    return NextResponse.json({ error: message }, { status });
   }
 }

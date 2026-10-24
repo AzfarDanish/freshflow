@@ -3,6 +3,7 @@ import {
   Package, Pencil, RotateCcw, SlidersHorizontal, XCircle,
 } from "lucide-react";
 import type { ActivityEvent, Recommendation, StaffTask } from "@/src/lib/types";
+import type { Role } from "@/src/lib/types";
 import {
   activityActorLabel, batchRisk, dateLabel, dateTimeLabel, taskInventorySummary,
 } from "@/src/lib/operations-view";
@@ -10,7 +11,7 @@ import type { InventoryRow } from "@/src/lib/operations-view";
 import { EmptyState, StatusBadge } from "./ui";
 import type { Tone } from "./ui";
 
-export type Role = "owner" | "staff";
+export type { Role } from "@/src/lib/types";
 
 const recommendationTone: Record<Recommendation["status"], Tone> = {
   pending: "warning",
@@ -115,13 +116,11 @@ export function RecommendationCard({
 export function TaskRow({
   task,
   recommendation,
-  role,
   busy,
   onComplete,
 }: {
   task: StaffTask;
   recommendation?: Recommendation;
-  role: Role;
   busy: boolean;
   onComplete: () => void;
 }) {
@@ -139,14 +138,13 @@ export function TaskRow({
       <p className="item-body">{task.instruction}</p>
       <div className="task-foot">
         <span className="task-assignee">Assigned to <strong>{task.assignedTo}</strong>{task.completedAt ? ` · completed ${dateTimeLabel(task.completedAt)}` : ""}</span>
-        {open && role === "staff" && (
+        {open && (
           <button type="button" className="btn btn-primary btn-sm" onClick={onComplete} disabled={busy}><ClipboardCheck aria-hidden="true" />Report outcome</button>
         )}
-        {open && role === "owner" && <span className="item-note inline">Switch to the Staff view to report</span>}
       </div>
       {task.status === "completed" && task.outcome && (
         <div className="reported">
-          <span className="reported-label">Staff-reported outcome · stock quantity unchanged</span>
+          <span className="reported-label">Reported outcome · stock quantity unchanged</span>
           {task.outcome}
           {task.outcomeExplanation && task.outcomeType !== "other" && <span className="reported-detail">{task.outcomeExplanation}</span>}
         </div>
@@ -162,6 +160,7 @@ function activityIcon(event: ActivityEvent) {
     case "task_completed": return <Check aria-hidden="true" />;
     case "inventory_added": return <Package aria-hidden="true" />;
     case "inventory_edited": return <Pencil aria-hidden="true" />;
+    case "inventory_deleted": return <XCircle aria-hidden="true" />;
     case "settings_changed": return <SlidersHorizontal aria-hidden="true" />;
     case "demo_reset": return <RotateCcw aria-hidden="true" />;
     case "invoice_uploaded":

@@ -57,7 +57,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 
 Each operation has its own Next.js route: Overview (`/`, summary and expiry watchlist), Decisions (`/decisions`), Staff tasks (`/tasks`), Activity (`/activity`), Invoice intake (`/invoices`), Inventory (`/inventory`, searchable and filterable by expiry status), and Settings & data (`/settings`). Navigation replaces the page content, with browser back/forward and direct links supported. The charcoal sidebar and workspace header remain mounted, preserving loaded data, the simulated Owner/Staff view, inventory filters, expiry-rule drafts, and unsaved invoice edits during navigation. Only the selected operation scrolls; the sidebar and header stay visible. On narrow screens the sidebar becomes a horizontal bar and tables stack into labelled rows.
 
-FreshFlow Demo Shop is the sole available workspace. There is no shop selector or displayed shop name. Kedai Runcit Demo is no longer available through the application; its stored records are not deleted. Settings & data contains the expiry threshold, essential synthetic-data and simulated-role disclosures, and a separately confirmed whole-demo reset.
+FreshFlow Demo Shop is the sole available workspace. There is no shop selector or displayed shop name. Kedai Runcit Demo is no longer available through the application; its stored records are not deleted. Settings & data contains the expiry threshold, role-preview disclosure, and a separately confirmed whole-demo reset.
 
 ### Operational data and reset
 
@@ -66,6 +66,12 @@ FreshFlow Demo Shop is the sole available workspace. There is no shop selector o
 - The shared workspace state updates from each successful server response. Navigation, window focus, cross-tab notifications, and a 15-second visible-page refresh keep pages synchronized. A read started before a mutation cannot overwrite its result; unsaved settings and invoice drafts are retained during background reads.
 - Reset is available only in Settings & data. It requires a warning, acknowledgement, and server-side `payload: { confirmed: true }`. It atomically restores initial inventory, settings, pending recommendations, decisions, tasks, invoice-intake state, and initial activity history; a real reset audit entry records the operation. It is scoped to the demo workspace.
 - To protect non-demo data, reset refuses the entire operation when any non-synthetic record or uploaded invoice exists. It does not delete these records, partially reset around them, or modify unrelated workspaces.
+
+### Owner and Staff preview permissions
+
+The Owner/Staff preview uses a signed, HTTP-only role cookie; the server validates permissions independently of request-body role values. Staff can view Overview, Inventory, Staff tasks, and Activity, and can record outcomes for open tasks. Owners can also access Decisions, Invoice intake, and Settings & data, edit/add/delete inventory batches, make recommendation decisions, change settings, and reset the demo. Inventory deletion requires confirmation, removes related pending risks, preserves completed history, and is blocked while the batch has an open task. Invoice upload and file-download routes are owner-only.
+
+This public preview switcher intentionally allows a viewer to select either role. It is a demonstration permission layer—not sign-in, an identity check, or production-grade authentication—and must not be used to protect sensitive or real customer data.
 
 ### Tech Stack
 
@@ -159,7 +165,7 @@ Open `http://localhost:5000`.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
 - Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.
-- The Owner/Staff role view remains a demonstration convenience, not authentication or secure authorization. Do not expose this demo API to public sensitive data.
+- The Owner/Staff role preview enforces the demo permission matrix in the interface and server routes, but anyone can switch preview roles; it is not authentication. Do not expose this demo API to public sensitive data.
 - For existing state, run the import before the first app request creates seed rows: `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, run `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime. Supabase migration requires access to the legacy source and was not verified against a live Supabase database.
 - `supabase/schema.sql` is retained only as a legacy reference; FreshFlow no longer uses Supabase at runtime.
 
@@ -178,7 +184,7 @@ Publishing uses `npm run build` followed by `npm run start` on port 5000. The de
 
 ### Scope and limitations
 
-Seed inventory and simulated workflow actions are synthetic. Uploaded invoice files and batches created from owner-confirmed lines are persisted as non-synthetic records. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a staff task records a report and never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
+Seed inventory and simulated workflow actions are synthetic. Uploaded invoice files and batches created from owner-confirmed lines are persisted as non-synthetic records. The demo date is fixed at 24 October 2026. The Owner/Staff switcher previews server-enforced demo permissions but is not identity verification or authentication; the public API is not suitable for production or sensitive data. Completing a task records a report and never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
 
 ---
 

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { OPERATIONS, operationForPath } from "@/src/lib/operation-navigation";
 import type { LucideIcon } from "lucide-react";
+import { canAccessOperation } from "@/src/lib/access-control";
+import type { Role } from "@/src/lib/types";
 import {
   Activity, ClipboardList, Database, FileText, Gauge, Leaf, Package, Settings2, Sparkles,
 } from "lucide-react";
@@ -13,7 +15,7 @@ const icons: Record<string, LucideIcon> = {
   invoices: FileText, inventory: Package, settings: Settings2,
 };
 
-export function Sidebar({ counts, storageLabel, locked }: { counts: Partial<Record<string, number>>; storageLabel: string; locked: boolean }) {
+export function Sidebar({ counts, storageLabel, locked, role }: { counts: Partial<Record<string, number>>; storageLabel: string; locked: boolean; role: Role }) {
   const active = operationForPath(usePathname())?.id;
   return (
     <aside className="sidebar">
@@ -24,7 +26,7 @@ export function Sidebar({ counts, storageLabel, locked }: { counts: Partial<Reco
       <nav className="side-nav" aria-label="Main navigation">
         <div className="nav-label">Operations</div>
         <ul>
-          {OPERATIONS.map(({ id, label, href }) => {
+          {OPERATIONS.filter(({ id }) => canAccessOperation(role, id)).map(({ id, label, href }) => {
             const Icon = icons[id];
             return (
             <li key={id}>

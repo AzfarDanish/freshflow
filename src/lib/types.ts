@@ -10,6 +10,7 @@ export type TaskOutcomeType =
   | "reported_to_owner"
   | "no_action_taken"
   | "other";
+export type Role = "owner" | "staff";
 export type ActivityActor = "system" | "simulated_owner" | "simulated_staff";
 
 export const TASK_OUTCOME_TYPES: TaskOutcomeType[] = [
@@ -134,6 +135,7 @@ export interface ActivityEvent {
     | "task_completed"
     | "inventory_added"
     | "inventory_edited"
+    | "inventory_deleted"
     | "invoice_uploaded"
     | "invoice_proposal_edited"
     | "invoice_proposal_confirmed"
@@ -206,6 +208,10 @@ export type InventoryAction =
       };
     }
   | {
+      type: "delete_inventory";
+      payload: { productId: string; batchId: string; confirmed: true };
+    }
+  | {
       type: "edit_invoice_proposal";
       payload: {
         intakeId: string;
@@ -258,4 +264,7 @@ export interface StateResponse {
   businessId: string;
   business: BusinessWorkspace;
   businesses: BusinessWorkspace[];
+  role?: Role;
+  recommendationCount?: number;
+  pendingRecommendationCount?: number;
 }

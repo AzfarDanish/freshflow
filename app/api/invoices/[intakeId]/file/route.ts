@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_BUSINESS_ID, getBusinessWorkspace } from "@/src/lib/businesses";
 import { getInvoiceDocument, getCurrentState } from "@/src/lib/store";
+import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
+import { roleFromRequest } from "@/src/lib/role-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ intakeId: string }> },
 ) {
   try {
+    requireActionPermission(roleFromRequest(request), "view_invoice_file");
     const { intakeId } = await params;
     const url = new URL(request.url);
     const businessId = url.searchParams.get("businessId") ?? DEFAULT_BUSINESS_ID;
@@ -35,6 +38,7 @@ export async function GET(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invoice file could not be loaded.";
-    return NextResponse.json({ error: message }, { status: 503 });
+    const status = error instanceof AccessDeniedError ? 403 : 503;
+    return NextResponse.json({ error: message }, { status });
   }
 }

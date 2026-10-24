@@ -194,17 +194,6 @@ describe("inventory action state transitions", () => {
         },
       }),
     ).rejects.toThrow("Explain the Other outcome");
-    await expect(
-      dispatchAction({
-        type: "complete_task",
-        payload: {
-          taskId: task.id,
-          outcomeType: "rotated",
-          role: "owner",
-        },
-      }),
-    ).rejects.toThrow("Switch to the Staff role view");
-
     const completed = await dispatchAction({
       type: "complete_task",
       payload: {

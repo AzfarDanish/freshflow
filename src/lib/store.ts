@@ -10,6 +10,7 @@ import {
   requireBusinessWorkspace,
 } from "@/src/lib/businesses";
 import { getPool } from "@/src/lib/db";
+import { requireActionPermission, roleBoundAction } from "@/src/lib/access-control";
 import { createBusinessSeedState, reconcileRisks } from "@/src/lib/expiry";
 import type {
   ActivityEvent,
@@ -21,6 +22,7 @@ import type {
   PersistenceMode,
   Product,
   Recommendation,
+  Role,
   StateResponse,
   StaffTask,
 } from "@/src/lib/types";
@@ -305,7 +307,12 @@ export async function getInvoiceDocument(
 export async function dispatchAction(
   action: InventoryAction,
   businessId = DEFAULT_BUSINESS_ID,
+  previewRole?: Role,
 ): Promise<StateResponse> {
+  const payloadRole = action.payload && "role" in action.payload ? action.payload.role : undefined;
+  const effectiveRole = previewRole ?? payloadRole ?? "owner";
+  requireActionPermission(effectiveRole, action.type);
+  action = roleBoundAction(action, effectiveRole);
   return withBusinessState(businessId, async (state, _client, mode) => {
     const business = requireBusinessWorkspace(businessId);
     const now = new Date().toISOString();
@@ -317,6 +324,9 @@ export async function dispatchAction(
         break;
       case "edit_inventory":
         editInventory(state, action.payload, now);
+        break;
+      case "delete_inventory":
+        deleteInventory(state, action.payload, now);
         break;
       case "edit_invoice_proposal":
         editInvoiceProposal(state, action.payload, now);
@@ -376,7 +386,7 @@ export async function dispatchAction(
     reconcileRisks(nextState, now);
     return {
       state: nextState,
-      value: stateResponse(nextState, mode, business.id),
+      value: stateResponse(nextState, mode, business.id, effectiveRole),
     };
   });
 }
@@ -385,6 +395,7 @@ function stateResponse(
   state: AppState,
   mode: PersistenceMode,
   businessId: string,
+  role: Role = "owner",
 ): StateResponse {
   const business = requireBusinessWorkspace(businessId);
   return {
@@ -393,6 +404,9 @@ function stateResponse(
     businessId: business.id,
     business,
     businesses: BUSINESS_WORKSPACES,
+    role,
+    recommendationCount: state.recommendations.length,
+    pendingRecommendationCount: state.recommendations.filter((item) => item.status === "pending").length,
   };
 }
 
@@ -830,6 +844,33 @@ function editInventory(
   });
 }
 
+function deleteInventory(
+  state: AppState,
+  input: Extract<InventoryAction, { type: "delete_inventory" }>["payload"],
+  now: string,
+): void {
+  if (input.confirmed !== true) {
+    throw new Error("Confirm deletion of this inventory batch before continuing.");
+  }
+  const product = state.products.find((item) => item.id === input.productId);
+  if (!product) throw new Error("Product not found in this shop.");
+  const batch = product.batches.find((item) => item.id === input.batchId);
+  if (!batch) throw new Error("Inventory batch not found in this shop.");
+  if (state.tasks.some((task) => task.status === "open" && task.productId === product.id && task.batchId === batch.id)) {
+    throw new Error("Complete the open staff task before deleting this inventory batch.");
+  }
+  product.batches = product.batches.filter((item) => item.id !== batch.id);
+  addActivity(state, {
+    type: "inventory_deleted",
+    title: "Inventory batch deleted",
+    description: `${product.name} · batch ${batch.id} (${batch.quantity} ${product.unit}, expiry ${batch.expiryDate}) was removed from inventory.`,
+    occurredAt: now,
+    productId: product.id,
+    batchId: batch.id,
+    simulated: product.simulated && batch.simulated,
+  });
+}
+
 function approveRecommendation(
   state: AppState,
   input: Extract<InventoryAction, { type: "approve" }>["payload"],
@@ -943,7 +984,6 @@ function completeTask(
   input: Extract<InventoryAction, { type: "complete_task" }>["payload"],
   now: string,
 ): void {
-  requireDemoRole(input.role, "staff");
   const task = state.tasks.find((item) => item.id === input.taskId);
   if (!task) throw new Error("Task not found.");
   if (task.status !== "open") throw new Error("This task is already complete.");
@@ -965,12 +1005,14 @@ function completeTask(
   task.outcome = outcome;
   task.outcomeType = input.outcomeType;
   task.outcomeExplanation = explanation;
+  const actor = input.role === "staff" ? "simulated_staff" : "simulated_owner";
+  const actorLabel = input.role === "staff" ? "staff" : "owner";
   addActivity(state, {
     type: "task_completed",
     title: "Staff task completed",
-    description: `${task.title} was marked complete by the simulated staff role. Reported outcome: ${outcome}. Inventory quantities were not changed.`,
+    description: `${task.title} was marked complete by the simulated ${actorLabel} role. Reported outcome: ${outcome}. Inventory quantities were not changed.`,
     occurredAt: now,
-    actor: "simulated_staff",
+    actor,
     productId: task.productId,
     batchId: task.batchId,
     recommendationId: task.recommendationId,
@@ -979,8 +1021,8 @@ function completeTask(
 }
 
 function requireDemoRole(
-  role: "owner" | "staff" | undefined,
-  expectedRole: "owner" | "staff",
+  role: Role | undefined,
+  expectedRole: Role,
 ): void {
   if (role !== expectedRole) {
     const label = expectedRole === "owner" ? "Owner" : "Staff";

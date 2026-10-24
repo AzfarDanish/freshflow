@@ -3,15 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList,
   Info, LoaderCircle, Package, Pencil, Plus, RefreshCw, RotateCcw, Search,
   Settings2, ShieldAlert, SlidersHorizontal, Sparkles, X, XCircle, Activity, Gauge,
+  Trash2,
 } from "lucide-react";
 import { DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
-import { OPERATIONS } from "@/src/lib/operation-navigation";
+import { OPERATIONS, operationForPath } from "@/src/lib/operation-navigation";
 import type { OperationId } from "@/src/lib/operation-navigation";
+import { canAccessOperation } from "@/src/lib/access-control";
 import { OperationPageContext } from "./OperationPage";
 import { TASK_OUTCOME_LABELS } from "@/src/lib/types";
 import type { AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType } from "@/src/lib/types";
@@ -27,7 +29,7 @@ import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/
 import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
 import type { Role } from "@/app/operations/workflow";
 
-type ModalKind = "add" | "edit" | "approve" | "reject" | "complete" | "reset" | null;
+type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "complete" | "reset" | null;
 type InventorySelection = { product: Product; batch: InventoryBatch };
 
 const emptyState: AppState = {
@@ -38,6 +40,7 @@ const emptyState: AppState = {
 const DIALOG_TITLES: Record<Exclude<ModalKind, null>, string> = {
   add: "Add stock batch",
   edit: "Edit inventory record",
+  delete: "Delete inventory batch",
   approve: "Approve recommendation",
   reject: "Reject recommendation",
   complete: "Report task outcome",
@@ -46,6 +49,7 @@ const DIALOG_TITLES: Record<Exclude<ModalKind, null>, string> = {
 
 export default function OperationsWorkspace({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const contentRef = useRef<HTMLDivElement>(null);
   const [response, setResponse] = useState<StateResponse | null>(null);
   const responseRef = useRef<StateResponse | null>(null);
@@ -92,6 +96,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     );
     responseRef.current = body;
     setResponse(body);
+    setRole(body.role ?? "owner");
   }, []);
 
   const loadState = useCallback(async (targetBusinessId: string, background = false) => {
@@ -113,6 +118,47 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
       if (requestId === loadRequestId.current) setLoading(false);
     }
   }, [applyStoredState]);
+
+  const changePreviewRole = useCallback(async (nextRole: Role) => {
+    if (busyRef.current || nextRole === responseRef.current?.role) return;
+    busyRef.current = true;
+    ++loadRequestId.current;
+    setBusy(true);
+    setActionError("");
+    try {
+      const roleResponse = await fetch("/api/role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ role: nextRole }),
+      });
+      const roleBody = await roleResponse.json();
+      if (!roleResponse.ok) throw new Error(roleBody?.error || "Could not change the preview role.");
+      const query = new URLSearchParams({ businessId });
+      const stateResponse = await fetch(`/api/state?${query}`, { cache: "no-store" });
+      const stateBody = await stateResponse.json();
+      if (!stateResponse.ok) throw new Error(stateBody?.error || "Could not load role permissions.");
+      applyStoredState(stateBody as StateResponse, false);
+      setLoadError("");
+      const activeOperation = operationForPath(pathname);
+      if (activeOperation && !canAccessOperation(nextRole, activeOperation.id)) router.replace("/");
+      syncChannelRef.current?.postMessage("changed");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not change the preview role.";
+      setActionError(message);
+      setToastError(true);
+      setToast(message);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [applyStoredState, businessId, pathname, router]);
+
+  useEffect(() => {
+    const activeOperation = operationForPath(pathname);
+    if (response && activeOperation && !canAccessOperation(response.role ?? role, activeOperation.id)) {
+      router.replace("/");
+    }
+  }, [pathname, response, role, router]);
 
   useEffect(() => { void loadState(businessId, true); }, [businessId, pathname, loadState]);
   useEffect(() => {
@@ -282,7 +328,8 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const recommendations = useMemo(() => sortRecommendations(state.recommendations), [state.recommendations]);
   const tasks = useMemo(() => sortTasks(state.tasks), [state.tasks]);
   const activity = useMemo(() => [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)), [state.activity]);
-  const pendingCount = state.recommendations.filter((recommendation) => recommendation.status === "pending").length;
+  const pendingCount = response?.pendingRecommendationCount ?? state.recommendations.filter((recommendation) => recommendation.status === "pending").length;
+  const recommendationCount = response?.recommendationCount ?? state.recommendations.length;
   const openTaskCount = state.tasks.filter((task) => task.status === "open").length;
   const invoiceReviewCount = state.invoiceIntakes.filter((intake) => intake.status === "review").length;
   const resetAllowed = Boolean(response?.business.simulated) && workspaceHasOnlySyntheticRecords(state);
@@ -337,6 +384,17 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     if (!selectedRecommendation) return;
     void sendAction({ type: "approve", payload: { recommendationId: selectedRecommendation.id, assignedTo: assignee.trim() || "Unassigned", role } }, "Recommendation approved; a staff task was created.");
   }
+  function deleteInventoryRecord() {
+    if (!selectedInventory) return;
+    void sendAction({
+      type: "delete_inventory",
+      payload: {
+        productId: selectedInventory.product.id,
+        batchId: selectedInventory.batch.id,
+        confirmed: true,
+      },
+    }, "Inventory batch deleted.");
+  }
   function rejectRecommendation() {
     if (!selectedRecommendation) return;
     void sendAction({ type: "reject", payload: { recommendationId: selectedRecommendation.id, reason: rejectReason.trim() || undefined, role } }, "Recommendation rejected.");
@@ -360,6 +418,9 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
   function renderPage(page: OperationId) {
     const operation = OPERATIONS.find((item) => item.id === page)!;
+    if (!canAccessOperation(role, page)) {
+      return <div className="alert alert-danger" role="alert">This page is not available in the Staff preview. Return to Overview or switch preview roles.</div>;
+    }
     return <>
       <div className="page-header">
         <div>
@@ -367,12 +428,12 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           <p className="page-meta">
             <span><CalendarDays aria-hidden="true" />Reference date <strong>{dateLabel(referenceDate)}</strong></span>
             <span>Expiry threshold <strong>{thresholdDays} days</strong></span>
-            <Link href="/settings"><Info aria-hidden="true" />Sample data and simulated roles</Link>
+            {role === "owner" && <Link href="/settings"><Info aria-hidden="true" />Sample data and simulated roles</Link>}
           </p>
         </div>
         <div className="page-actions">
           <button type="button" className="btn btn-secondary" onClick={() => void loadState(businessId)} disabled={loading || busy}><RefreshCw aria-hidden="true" className={loading ? "spin" : ""} />Refresh</button>
-          {(page === "overview" || page === "inventory") && <button type="button" className="btn btn-primary" onClick={() => openModal("add")} disabled={busy || loading || Boolean(loadError)}><Plus aria-hidden="true" />Add stock</button>}
+          {role === "owner" && (page === "overview" || page === "inventory") && <button type="button" className="btn btn-primary" onClick={() => openModal("add")} disabled={busy || loading || Boolean(loadError)}><Plus aria-hidden="true" />Add stock</button>}
         </div>
       </div>
 
@@ -383,7 +444,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         <dl className="stats" aria-label="Reference date summary">
           <div className="stat"><dt>Expired batches</dt><dd className={groups.expired.length ? "tone-danger" : ""}>{loading ? "—" : groups.expired.length}</dd><span className="stat-note">Shown separately from approaching</span></div>
           <div className="stat"><dt>Approaching expiry</dt><dd className={groups.approaching.length ? "tone-warning" : ""}>{loading ? "—" : groups.approaching.length}</dd><span className="stat-note">Within {thresholdDays} days</span></div>
-          <div className="stat"><dt>Awaiting decision</dt><dd>{loading ? "—" : pendingCount}</dd><span className="stat-note">{state.recommendations.length} recommendations total</span></div>
+          <div className="stat"><dt>Awaiting decision</dt><dd>{loading ? "—" : pendingCount}</dd><span className="stat-note">{recommendationCount} recommendations total</span></div>
           <div className="stat"><dt>Open staff tasks</dt><dd>{loading ? "—" : openTaskCount}</dd><span className="stat-note">{state.tasks.length} tasks total</span></div>
         </dl>
 
@@ -410,7 +471,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         {page === "tasks" &&
           <Section id="tasks" icon={ClipboardList} title="Staff tasks" description="Created when an owner approves a recommendation; staff report the outcome" meta={loading ? undefined : `${openTaskCount} open`} className="scroll-panel">
             {loading ? <LoadingRows label="Loading staff tasks" /> :
-              tasks.length ? <div className="list">{tasks.map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} role={role} busy={busy} onComplete={() => openModal("complete", undefined, task)} />)}</div> :
+              tasks.length ? <div className="list">{tasks.map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} busy={busy} onComplete={() => openModal("complete", undefined, task)} />)}</div> :
               <EmptyState title="No staff tasks">Approve a pending recommendation to create one.</EmptyState>}
           </Section>
         }
@@ -478,7 +539,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
                       <td data-label="Quantity" className="num mono">{batch.quantity} {product.unit}</td>
                       <td data-label="Expiry">{dateLabel(batch.expiryDate)}</td>
                       <td data-label="Status"><StatusBadge tone={risk.tone}>{risk.label}</StatusBadge></td>
-                      <td className="row-actions"><button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Edit ${product.name} batch ${batch.id}`}><Pencil aria-hidden="true" />Edit</button></td>
+                      <td className="row-actions">{role === "owner" && <div className="toolbar">
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Edit ${product.name} batch ${batch.id}`}><Pencil aria-hidden="true" />Edit</button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("delete", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Delete ${product.name} batch ${batch.id}`}><Trash2 aria-hidden="true" />Delete</button>
+                      </div>}</td>
                     </tr>;
                   })}
                 </tbody>
@@ -505,7 +569,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
               <h3 className="block-title"><Info aria-hidden="true" />About this workspace</h3>
               <ul className="facts">
                 <li><strong>Sample data.</strong> Seed products, batches and staff names are synthetic. Uploaded invoices and owner-confirmed batches are stored as real records.</li>
-                <li><strong>Simulated roles.</strong> The Owner/Staff view is not sign-in or access control.</li>
+                <li><strong>Role preview.</strong> Owner and Staff preview roles are enforced for demo pages and actions, but are not sign-in or production authentication.</li>
                 <li><strong>Reference date.</strong> Expiry is calculated against the configured date shown above, not today&apos;s calendar date.</li>
                 <li><strong>Storage.</strong> {storageLabel}. There is no live POS or stock-system sync; completing a task never changes quantities.</li>
               </ul>
@@ -531,7 +595,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
   return <div className="shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
-    <Sidebar storageLabel={storageLabel} counts={{ decisions: pendingCount, tasks: openTaskCount, invoices: invoiceReviewCount }} locked={controlsLocked} />
+    <Sidebar storageLabel={storageLabel} counts={{ decisions: pendingCount, tasks: openTaskCount, invoices: invoiceReviewCount }} locked={controlsLocked} role={role} />
     <main className="main" id="main-content" tabIndex={-1}>
       <header className="topbar">
         <div className="topbar-context">
@@ -540,10 +604,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>
         <div className="top-actions">
           <div className="control" role="group" aria-labelledby="role-view-label">
-            <span className="control-label" id="role-view-label" title="Role views are simulated for this MVP. They are not sign-in or access control.">Role view · simulated</span>
+            <span className="control-label" id="role-view-label" title="Preview roles enforce demo permissions only. This is not sign-in or production authentication.">Role preview</span>
             <div className="segmented">
               {(["owner", "staff"] as const).map((value) => (
-                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => setRole(value)} disabled={controlsLocked}>
+                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked}>
                   {value === "owner" ? "Owner" : "Staff"}
                 </button>
               ))}
@@ -563,7 +627,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         <div className="dialog-head">
           <div>
             <h2 id="dialog-title">{DIALOG_TITLES[modal]}</h2>
-            <p className="dialog-intro" id="dialog-intro">{modal === "add" ? `Add a product batch to ${businessName}.` : modal === "edit" ? "Update this product and batch. Related expiry risks are recalculated." : modal === "approve" ? "Approval creates one staff task linked to this recommendation." : modal === "reject" ? "Record the owner decision. No task is created." : modal === "complete" ? "Record what staff reported. Completing a task does not adjust stock quantity." : `This affects ${businessName} only.`}</p>
+            <p className="dialog-intro" id="dialog-intro">{modal === "add" ? `Add a product batch to ${businessName}.` : modal === "edit" ? "Update this product and batch. Related expiry risks are recalculated." : modal === "delete" ? "Remove this batch from inventory. Historical decisions and completed reports remain." : modal === "approve" ? "Approval creates one staff task linked to this recommendation." : modal === "reject" ? "Record the owner decision. No task is created." : modal === "complete" ? "Record what staff reported. Completing a task does not adjust stock quantity." : `This affects ${businessName} only.`}</p>
           </div>
           <button type="button" className="icon-btn" aria-label="Close dialog" onClick={closeModal} disabled={busy}><X aria-hidden="true" /></button>
         </div>
@@ -582,6 +646,14 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : modal === "edit" ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}{modal === "edit" ? "Save changes" : "Add batch"}</button></div>
         </form>}
 
+        {modal === "delete" && <div>
+          <div className="alert alert-danger compact"><AlertTriangle aria-hidden="true" /><span>
+            Delete <strong>{selectedInventory?.product.name} · {selectedInventory?.batch.id}</strong> ({selectedInventory?.batch.quantity} {selectedInventory?.product.unit}, expires {dateLabel(selectedInventory?.batch.expiryDate ?? "")}) from inventory? Pending expiry recommendations for this batch will be removed. Historical decisions and completed task reports will remain. Deletion is blocked while an open staff task references this batch.
+          </span></div>
+          {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy} data-autofocus>Keep batch</button><button type="button" className="btn btn-danger" onClick={deleteInventoryRecord} disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Trash2 aria-hidden="true" />}Delete batch</button></div>
+        </div>}
+
         {modal === "approve" && <div>
           {selectedRecommendation && <div className="summary-box"><div className="summary-title">{selectedRecommendation.productName}</div><div className="summary-meta mono">{selectedRecommendation.quantity} {selectedRecommendation.unit} · Batch {selectedRecommendation.batchId} · Expires {dateLabel(selectedRecommendation.expiryDate)}</div><p>{selectedRecommendation.suggestedAction}</p></div>}
           <div className="field"><label htmlFor="assignee">Assign task to</label><select id="assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Aina</option><option>Ravi</option><option>Mei Ling</option><option>Unassigned</option></select><span className="field-hint">Staff names are sample team members.</span></div>
@@ -598,7 +670,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
         {modal === "complete" && <div>
           <div className="summary-box"><div className="summary-title">{selectedTask?.title}</div>{selectedTaskInventory && <div className="summary-meta mono">{selectedTaskInventory}</div>}<p>{selectedTask?.instruction}</p><div className="summary-meta">Assigned to {selectedTask?.assignedTo}</div></div>
-          <div className="field"><label htmlFor="outcomeType">Staff-reported outcome</label><select id="outcomeType" value={outcomeType} onChange={(event) => { setOutcomeType(event.target.value as TaskOutcomeType); setOutcomeExplanation(""); }}>{Object.entries(TASK_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+          <div className="field"><label htmlFor="outcomeType">{role === "staff" ? "Staff-reported outcome" : "Task outcome"}</label><select id="outcomeType" value={outcomeType} onChange={(event) => { setOutcomeType(event.target.value as TaskOutcomeType); setOutcomeExplanation(""); }}>{Object.entries(TASK_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
           {outcomeType === "other" && <div className="field"><label htmlFor="outcomeExplanation">Explain the Other outcome</label><textarea id="outcomeExplanation" value={outcomeExplanation} onChange={(event) => setOutcomeExplanation(event.target.value)} minLength={3} maxLength={500} required placeholder="Describe what staff reported" /></div>}
           <p className="field-hint"><Info aria-hidden="true" />This records a report only. No stock quantity is adjusted.</p>
           {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
