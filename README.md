@@ -72,7 +72,6 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 ├── app/                     # Next.js operations UI and API routes
 ├── src/lib/                 # Business registry, expiry, invoice extraction, database and types
 ├── drizzle.config.ts        # Replit PostgreSQL schema configuration
-├── drizzle/                 # Generated PostgreSQL schema snapshots
 ├── scripts/
 │   └── import-existing-state.ts # Non-destructive local/Supabase import utility
 ├── supabase/
@@ -128,9 +127,9 @@ cd your-project
 # 2. Install Node.js and dependencies
 npm ci
 
-# 3. Configure a PostgreSQL database (Replit injects DATABASE_URL automatically)
-cp .env.example .env
-# Set DATABASE_URL locally, then apply the schema:
+# 3. Set DATABASE_URL in your shell environment (Replit injects it automatically).
+# .env.example lists the variable names; the database CLI reads the process environment.
+# Apply the schema to your development database:
 npm run db:push
 
 # 4. Run the app
@@ -147,7 +146,7 @@ Open `http://localhost:5000`.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
 - Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.
 - Shop and role switching remain demonstration conveniences, not authentication or secure tenant authorization. Do not expose this demo API to public sensitive data.
-- For existing state, `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, apply `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime.
+- For existing state, run the import before the first app request creates seed rows: `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, run `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime. Supabase migration requires access to the legacy source and was not verified against a live Supabase database.
 - `supabase/schema.sql` is retained only as a legacy reference; FreshFlow no longer uses Supabase at runtime.
 
 ### Tests and build

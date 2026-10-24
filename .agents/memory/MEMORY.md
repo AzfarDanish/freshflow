@@ -1,1 +1,2 @@
 - [Next.js Replit preview origins](next-replit-preview.md) — include `REPLIT_DEV_DOMAIN` in `allowedDevOrigins` so proxied development assets and HMR load.
+- [PDF runtime verification](pdf-runtime-verification.md) — verify PDF extraction through a running Next.js route; direct Node tests cannot catch bundled worker-loading failures.
