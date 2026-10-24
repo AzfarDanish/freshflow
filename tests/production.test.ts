@@ -109,13 +109,19 @@ describe("read-only assistant and migration safety",()=>{
     vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
     vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
     const fetchMock=vi.fn(async (_input:RequestInfo|URL, _init?:RequestInit)=>new Response(JSON.stringify({
-      choices:[{message:{content:JSON.stringify({tool:"stock",search:"APP"})}}],
+      choices:[{message:{content:[{type:"text",text:'Plan:\n```json\n{"tool":"stock","search":"APP"}\n```'}]}}],
     }),{status:200,headers:{"Content-Type":"application/json"}}));
     vi.stubGlobal("fetch",fetchMock);
 
     const response=await inventoryQuestion("How many apples are recorded?",staff,{});
 
-    expect(query).toHaveBeenCalledWith(
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT state #>> '{settings,timeZone}' AS timezone FROM freshflow_business_state WHERE business_id=$1",
+      [staff.businessId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
       "SELECT state FROM freshflow_business_state WHERE business_id=$1",
       [staff.businessId],
     );
@@ -123,7 +129,24 @@ describe("read-only assistant and migration safety",()=>{
     expect(response.answer).toContain("1 matching stock batch");
     const requestBody=JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(requestBody.model).toBe("deepseek/deepseek-v4-flash-0731");
+    expect(requestBody.max_tokens).toBe(1000);
     expect(requestBody.messages[0].content).toContain("Effective role: staff");
+  });
+  it("does not read operational records when the provider returns an unusable plan",async()=>{
+    const query=vi.fn().mockResolvedValue({rows:[{timezone:"Asia/Kuala_Lumpur"}]});
+    vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
+    vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({
+      choices:[{message:{content:'```json\n{"tool":\n```'}}],
+    }),{status:200,headers:{"Content-Type":"application/json"}})));
+
+    await expect(inventoryQuestion("How many apples are recorded?",staff,{}))
+      .rejects.toMatchObject({status:502,message:expect.stringContaining("No inventory records were read")});
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      "SELECT state #>> '{settings,timeZone}' AS timezone FROM freshflow_business_state WHERE business_id=$1",
+      [staff.businessId],
+    );
   });
   it("fails clearly without OpenRouter credentials and does not fabricate an answer",async()=>{
     vi.stubEnv("OPENROUTER_API_KEY","");
