@@ -192,7 +192,7 @@ export function reconcileRisks(
         actor: "system",
         productId: product.id,
         batchId: batch.id,
-        simulated: true,
+        simulated: batch.simulated,
       });
       changed = true;
     }
@@ -233,7 +233,7 @@ function buildRecommendation(
     ),
     status: "pending",
     createdAt,
-    simulated: true,
+    simulated: batch.simulated,
   };
 }
 

@@ -132,11 +132,11 @@ function parseAction(input: unknown): InventoryAction {
       const quantity = payload.quantity;
       if (
         typeof quantity !== "number" ||
-        !Number.isInteger(quantity) ||
-        quantity < 1 ||
+        !Number.isFinite(quantity) ||
+        quantity <= 0 ||
         quantity > 100_000
       ) {
-        throw new Error("Quantity must be a whole number from 1 to 100,000.");
+        throw new Error("Quantity must be positive and no greater than 100,000.");
       }
       if (!isValidDate(payload.expiryDate)) {
         throw new Error("Enter a valid expiry date.");

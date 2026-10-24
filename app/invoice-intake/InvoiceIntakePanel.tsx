@@ -69,7 +69,7 @@ type Draft = {
   unit: string;
   batchId: string;
   expiryDate: string;
-  matchMode: "existing" | "new";
+  matchMode: "existing" | "new" | "";
   matchedProductId: string;
 };
 
@@ -82,7 +82,7 @@ function toDraft(proposal: Proposal): Draft {
     unit: proposal.unit ?? "",
     batchId: proposal.batchId ?? "",
     expiryDate: proposal.expiryDate ?? "",
-    matchMode: proposal.matchedProductId ? "existing" : "new",
+    matchMode: proposal.matchedProductId ? "existing" : "",
     matchedProductId: proposal.matchedProductId ?? "",
   };
 }
@@ -166,6 +166,7 @@ export function InvoiceIntakePanel({
     const missing: string[] = [];
     if (!fields) missing.push("Quantity must be a positive number.");
     if (isConfirm) {
+      if (!draft.matchMode) missing.push("Choose Match existing product or Create new product.");
       if (!draft.productName.trim()) missing.push("Add a product name.");
       if (!draft.sku.trim()) missing.push("Add a SKU.");
       if (draft.matchMode === "new" && !draft.category.trim()) missing.push("Add a category for the new product.");
@@ -221,6 +222,7 @@ export function InvoiceIntakePanel({
     const draft = getDraft(intakeId, proposal);
     const fields = validate(draft, key, true);
     if (!fields) return;
+    if (draft.matchMode !== "existing" && draft.matchMode !== "new") return;
     setLocalBusy(key);
     setFeedback("");
     try {
@@ -387,7 +389,7 @@ export function InvoiceIntakePanel({
                                     {productOptions.map((product) => <option value={product.id} key={product.id}>{product.name} · {product.sku} · {product.category}</option>)}
                                   </select>
                                 ) : (
-                                  <div className={styles.newProductNote}>Confirmation will mark this as a new product. No product or stock is created before owner confirmation.</div>
+                                  <div className={styles.newProductNote}>{draft.matchMode === "new" ? "Confirmation will create a new product and stock batch." : "Choose a product destination above before confirming."} No stock is created before owner confirmation.</div>
                                 )}
                                 <div className={styles.editGrid}>
                                   <Field label="Product name" value={draft.productName} placeholder="Missing from invoice" invalid={!draft.productName.trim()} onChange={(value) => patchDraft(intake.id, proposal, { productName: value })} />

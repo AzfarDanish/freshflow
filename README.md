@@ -116,7 +116,7 @@ Browser ──► Next.js UI and API ──► Replit PostgreSQL
 1. Import this repository into Replit and enable its managed PostgreSQL database.
 2. Run `npm run db:push` once to apply the Drizzle schema to the development database.
 3. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
-4. After code merges, the configured post-merge setup installs packages and pushes the schema to the development database. Production schema changes must be applied to the production database before publishing.
+4. After code merges, the configured post-merge setup installs packages and pushes the schema to the development database. Replit's Publish flow compares development and production schemas and applies production schema changes when you publish.
 
 ### Option 2 — Run Locally
 
@@ -142,7 +142,7 @@ Open `http://localhost:5000`.
 ### Persistence and database setup
 
 - **Replit PostgreSQL is the runtime store.** The app requires `DATABASE_URL` and fails explicitly if it is unavailable; it does not silently switch to local files. Replit supplies this value for its managed database. Do not expose it to client code.
-- `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the selected database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Apply production schema changes to the production database before publishing.
+- `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the development database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Replit's Publish flow applies the development-to-production schema diff when you publish.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
 - Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.

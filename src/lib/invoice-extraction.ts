@@ -295,24 +295,26 @@ async function parsePdfInvoice(bytes: Uint8Array): Promise<InvoiceExtractionResu
     if (document.numPages > 50) {
       throw new Error("The PDF has too many pages.");
     }
-    const allItems: Array<{ str: string; x: number; y: number; width: number }> = [];
+    let itemCount = 0;
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const pageItems: Array<{ str: string; x: number; y: number; width: number }> = [];
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
       for (const item of content.items) {
         if (!("str" in item) || !item.str.trim()) continue;
-        allItems.push({
+        pageItems.push({
           str: item.str,
           x: item.transform[4] ?? 0,
           y: item.transform[5] ?? 0,
           width: item.width,
         });
-        if (allItems.length > 100_000) {
+        itemCount += 1;
+        if (itemCount > 100_000) {
           throw new Error("The PDF contains too much text to process.");
         }
       }
+      textLines.push(...rowsFromPdfItems(pageItems));
     }
-    textLines = rowsFromPdfItems(allItems);
   } catch {
     throw new Error("This PDF could not be read. Upload a valid, text-based PDF or a supported CSV.");
   } finally {

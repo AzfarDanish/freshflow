@@ -148,6 +148,43 @@ describe("supplier invoice extraction", () => {
 });
 
 describe("invoice review and confirmation", () => {
+  it("flags inventory conflicts and saves owner edits without changing stock", async () => {
+    const { dispatchAction, getCurrentState } = await import("../src/lib/store");
+    const fields = proposal({ sku: "MILK", unit: "packs", batchId: "MILK-001" });
+    const intake = await uploadTestIntake(fields);
+    const uploaded = await getCurrentState();
+    expect(uploaded.state.invoiceIntakes[0]?.proposals[0]?.issues.join(" ")).toContain("conflicts");
+    expect(uploaded.state.invoiceIntakes[0]?.proposals[0]?.issues.join(" ")).toContain("already exists");
+    const edited = await dispatchAction({
+      type: "edit_invoice_proposal",
+      payload: {
+        intakeId: intake.id,
+        proposalId: intake.proposals[0]!.id,
+        fields: { ...fields, unit: "bottles", batchId: "MILK-NEW" },
+        role: "owner",
+      },
+    });
+    expect(edited.state.invoiceIntakes[0]?.proposals[0]?.status).toBe("pending");
+    expect(edited.state.products.flatMap((product) => product.batches)).toHaveLength(4);
+  });
+
+  it("rejects cross-shop proposals and conflicting product choices", async () => {
+    const { dispatchAction } = await import("../src/lib/store");
+    const intake = await uploadTestIntake(proposal());
+    const action = {
+      type: "confirm_invoice_proposal" as const,
+      payload: {
+        intakeId: intake.id,
+        proposalId: intake.proposals[0]!.id,
+        fields: { ...intake.proposals[0]!, matchedProductId: "product-milk" },
+        matchMode: "existing" as const,
+        role: "owner" as const,
+      },
+    };
+    await expect(dispatchAction(action, "kedai-runcit-demo")).rejects.toThrow("not found in this shop");
+    await expect(dispatchAction(action)).rejects.toThrow("SKU does not match");
+  });
+
   it("stores source files privately per shop and keeps uploads out of stock", async () => {
     const { getCurrentState, getInvoiceDocument } = await import("../src/lib/store");
     const intake = await uploadTestIntake(proposal());

@@ -195,6 +195,9 @@ export async function createInvoiceIntake(
     if (state.invoiceIntakes.some((item) => item.id === intake.id)) {
       throw new Error("That invoice has already been uploaded.");
     }
+    for (const proposal of intake.proposals) {
+      addProposalConflicts(state, intake, proposal);
+    }
     if (client) {
       await client.query(
         `INSERT INTO freshflow_invoice_documents
@@ -461,6 +464,37 @@ function updateIntakeStatus(intake: InvoiceIntake): void {
     : "review";
 }
 
+function addProposalConflicts(
+  state: AppState,
+  intake: InvoiceIntake,
+  proposal: InvoiceProposal,
+): void {
+  const existing = state.products.find(
+    (product) => product.sku.toUpperCase() === proposal.sku.toUpperCase(),
+  );
+  if (existing) {
+    proposal.issues.push("This SKU already exists; explicitly match the existing product.");
+    if (proposal.unit && existing.unit.toLowerCase() !== proposal.unit.toLowerCase()) {
+      proposal.issues.push("The invoice unit conflicts with the existing product unit.");
+    }
+    if (proposal.productName && existing.name.toLowerCase() !== proposal.productName.toLowerCase()) {
+      proposal.issues.push("The invoice name differs from the existing product name.");
+    }
+  }
+  if (proposal.batchId && state.products.some((product) =>
+    product.batches.some((batch) => batch.id.toUpperCase() === proposal.batchId.toUpperCase()),
+  )) {
+    proposal.issues.push("This batch identifier already exists in this shop.");
+  }
+  if (proposal.batchId && intake.proposals.some((other) =>
+    other.id !== proposal.id &&
+    other.status === "pending" &&
+    other.batchId.toUpperCase() === proposal.batchId.toUpperCase(),
+  )) {
+    proposal.issues.push("Another invoice line uses this batch identifier.");
+  }
+}
+
 function editInvoiceProposal(
   state: AppState,
   input: Extract<InventoryAction, { type: "edit_invoice_proposal" }>["payload"],
@@ -475,6 +509,7 @@ function editInvoiceProposal(
   const fields = validateProposalFields(input.fields);
   Object.assign(proposal, fields);
   updateProposalIssues(proposal);
+  addProposalConflicts(state, intake, proposal);
   addActivity(state, {
     type: "invoice_proposal_edited",
     title: "Invoice proposal edited",
@@ -690,8 +725,8 @@ function editInventory(
   if (!productName || !sku || !category || !unit || !batchId) {
     throw new Error("Complete every product and batch field.");
   }
-  if (!Number.isInteger(input.quantity) || input.quantity < 1) {
-    throw new Error("Quantity must be a whole number greater than zero.");
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0 || input.quantity > 100_000) {
+    throw new Error("Quantity must be positive and no greater than 100,000.");
   }
   if (!isValidInventoryDate(input.expiryDate)) {
     throw new Error("Enter a valid expiry date.");

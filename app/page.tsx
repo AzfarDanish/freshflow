@@ -363,8 +363,8 @@ export default function HomePage() {
     const unit = String(form.get("unit") ?? "").trim();
     const expiryDate = String(form.get("expiryDate") ?? "");
     const batchId = String(form.get("batchId") ?? "").trim();
-    if (!productName || !sku || !category || !unit || !batchId || !expiryDate || !Number.isInteger(quantity) || quantity < 1) {
-      setFormError("Enter all fields and a whole-number quantity greater than zero.");
+    if (!productName || !sku || !category || !unit || !batchId || !expiryDate || !Number.isFinite(quantity) || quantity <= 0 || (modal !== "edit" && !Number.isInteger(quantity))) {
+      setFormError("Enter all fields and a positive quantity; manually added batches require a whole number.");
       return;
     }
     if (modal === "edit" && selectedInventory) {
@@ -428,7 +428,7 @@ export default function HomePage() {
         <button className="nav-item" onClick={() => document.getElementById("tasks-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })}><ClipboardList /><span>Staff tasks</span></button>
       </nav>
       <div className="side-bottom">
-        <div className="demo-note"><strong>SIMULATION MODE</strong>All products, events and reported outcomes shown here are synthetic. No live stock system is connected.</div>
+        <div className="demo-note"><strong>DEMO WORKFLOW</strong>Seed inventory and roles are simulated. Invoice records come from uploaded files. No live stock system is connected.</div>
         <div className="side-version">FRESHFLOW · DEMO 01</div>
       </div>
     </aside>
@@ -580,7 +580,7 @@ export default function HomePage() {
             </Panel>
 
             <Panel>
-              <div className="panel-head"><div><div className="panel-title"><Activity />Activity log</div><div className="panel-subtitle">Newest events first · simulated records</div></div><span className="small-mono">{activity.length} EVENTS</span></div>
+              <div className="panel-head"><div><div className="panel-title"><Activity />Activity log</div><div className="panel-subtitle">Newest events · demo actions and invoice decisions</div></div><span className="small-mono">{activity.length} EVENTS</span></div>
               {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
               activity.length ? <div className="activity">{activity.map((event) => <div className="event" key={event.id}><div className="event-title">{event.title}</div><div className="event-desc">{event.description}</div><div className="event-meta"><span>{activityActorLabel(event.actor)}</span>{event.batchId && <span>Batch {event.batchId}</span>}{event.recommendationId && <span>Recommendation linked</span>}{event.taskId && <span title={event.taskId}>Task linked</span>}<time dateTime={event.occurredAt}>{dateTimeLabel(event.occurredAt)}</time></div></div>)}</div> : <div className="recommendation"><Empty>No activity recorded yet.</Empty></div>}
             </Panel>
@@ -608,7 +608,7 @@ export default function HomePage() {
             <div className="field"><label htmlFor="category">Category</label><input id="category" name="category" required defaultValue={selectedInventory?.product.category} placeholder="Dairy" /></div>
             <div className="field"><label htmlFor="unit">Unit</label><input id="unit" name="unit" required defaultValue={selectedInventory?.product.unit} placeholder="bottles" /></div>
             <div className="field"><label htmlFor="batchId">Batch ID</label><input id="batchId" name="batchId" required defaultValue={selectedInventory?.batch.id} placeholder="e.g. MILK-003" /></div>
-            <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" required type="number" min="1" max="100000" step="1" inputMode="numeric" defaultValue={selectedInventory?.batch.quantity} placeholder="24" /></div>
+            <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" required type="number" min={modal === "edit" ? "0.000001" : "1"} max="100000" step={modal === "edit" ? "any" : "1"} inputMode="decimal" defaultValue={selectedInventory?.batch.quantity} placeholder="24" /></div>
             <div className="field full"><label htmlFor="expiryDate">Expiry date</label><input id="expiryDate" name="expiryDate" required type="date" defaultValue={selectedInventory?.batch.expiryDate} /></div>
           </div>
           {formError && <div className="form-error" role="alert">{formError}</div>}
