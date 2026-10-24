@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+import { createSeedState } from "./fixtures/seed-state";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InvoiceIntake, InvoiceProposalInput } from "../src/lib/types";
@@ -13,6 +16,8 @@ let temporaryDirectory = "";
 beforeEach(async () => {
   temporaryDirectory = await mkdtemp(path.join(tmpdir(), "freshflow-invoice-test-"));
   process.env.FRESHFLOW_LOCAL_STATE_PATH = path.join(temporaryDirectory, "state.json");
+  vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+  await writeFile(process.env.FRESHFLOW_LOCAL_STATE_PATH,JSON.stringify(createSeedState()));
 });
 
 afterEach(async () => {
@@ -20,8 +25,13 @@ afterEach(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
 });
 
-function createPdfWithTextTable(includeText = true): Buffer {
-  const commands = includeText ? [
+function createPdfWithTextTable(includeText = true,labeled=false): Buffer {
+  const commands = includeText ? (labeled?[
+    "BT","/F1 14 Tf","40 740 Td (Product: Fresh milk) Tj",
+    "0 -28 Td (SKU: MILK-01) Tj","0 -28 Td (Category: Dairy) Tj",
+    "0 -28 Td (Quantity: 8) Tj","0 -28 Td (Unit: bottles) Tj",
+    "0 -28 Td (Batch: MILK-B12) Tj","0 -28 Td (Expiry: 2026-11-30) Tj","ET",
+  ]:[
     "BT",
     "/F1 11 Tf",
     "40 740 Td (SKU) Tj",
@@ -40,7 +50,7 @@ function createPdfWithTextTable(includeText = true): Buffer {
     "70 0 Td (MILK-B12) Tj",
     "80 0 Td (2026-11-30) Tj",
     "ET",
-  ].join("\n") : "";
+  ]).join("\n") : "";
   const stream = `${commands}\n`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
@@ -62,6 +72,15 @@ function createPdfWithTextTable(includeText = true): Buffer {
   }
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
   return Buffer.from(pdf, "ascii");
+}
+
+async function receiveTestLine(intake:InvoiceIntake,fields:InvoiceProposalInput,matchMode:"new"|"existing") {
+  const {withBusinessState,stateResponse}=await import("../src/lib/store");
+  const {applyReceivingAction}=await import("../src/lib/receiving");
+  return withBusinessState("freshflow-demo",async(state,_,mode)=>{
+    applyReceivingAction(state,{type:"receive_invoice",payload:{intakeId:intake.id,requestId:randomUUID(),confirmed:true,lines:[{proposalId:intake.proposals[0].id,quantity:fields.quantity,batchId:fields.batchId,expiryDate:fields.expiryDate,matchMode,fields}]}},{userId:"verified-test-owner",businessId:"freshflow-demo",actualRole:"owner",role:"owner"});
+    return {state,value:stateResponse(state,mode,"freshflow-demo","owner")};
+  });
 }
 
 function proposal(overrides: Partial<InvoiceProposalInput> = {}): InvoiceProposalInput {
@@ -103,6 +122,18 @@ async function uploadTestIntake(fields: InvoiceProposalInput) {
 }
 
 describe("supplier invoice extraction", () => {
+  it("runs real deterministic OCR on a scanned image without inventing fields or changing stock",async()=>{
+    const input=path.join(temporaryDirectory,"source.pdf"),output=path.join(temporaryDirectory,"scan");
+    await writeFile(input,createPdfWithTextTable(true,true));
+    await promisify(execFile)("pdftoppm",["-singlefile","-scale-to","1800","-png",input,output],{timeout:15000});
+    const {processInvoice}=await import("../src/lib/invoice-processing");
+    const result=await processInvoice(await readFile(output+".png"),"image/png");
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0]).toMatchObject({productName:"Fresh milk",quantity:8,unit:"bottles",expiryDate:"2026-11-30"});
+    expect(result.warnings.join(" ")).toContain("unverified");
+    const {getCurrentState}=await import("../src/lib/store");
+    expect((await getCurrentState()).state.products.flatMap(p=>p.batches)).toHaveLength(4);
+  },30000);
   it("maps UTF-8 CSV headers and leaves missing or ambiguous values for review", async () => {
     const csv = [
       "SKU,Product,Category,Quantity,Unit,Batch,Expiry",
@@ -182,7 +213,7 @@ describe("invoice review and confirmation", () => {
       },
     };
     await expect(dispatchAction(action, "kedai-runcit-demo")).rejects.toThrow("not available");
-    await expect(dispatchAction(action)).rejects.toThrow("SKU does not match");
+    await expect(receiveTestLine(intake,action.payload.fields,"existing")).rejects.toThrow("same reviewed SKU");
   });
 
   it("stores source files privately per shop and keeps uploads out of stock", async () => {
@@ -219,16 +250,7 @@ describe("invoice review and confirmation", () => {
     })).rejects.toThrow("not allowed to confirm invoice proposal");
     expect((await getCurrentState()).state.products.some((product) => product.sku === line.sku)).toBe(false);
 
-    const confirmed = await dispatchAction({
-      type: "confirm_invoice_proposal",
-      payload: {
-        intakeId: intake.id,
-        proposalId: line.id,
-        fields: line,
-        matchMode: "new",
-        role: "owner",
-      },
-    });
+    const confirmed = await receiveTestLine(intake,line,"new");
     const product = confirmed.state.products.find((item) => item.sku === line.sku);
     expect(product).toMatchObject({ name: line.productName, simulated: false });
     expect(product?.batches[0]).toMatchObject({
@@ -239,14 +261,12 @@ describe("invoice review and confirmation", () => {
     expect(confirmed.state.invoiceIntakes[0]?.status).toBe("completed");
     expect(confirmed.state.activity).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: "invoice_proposal_confirmed",
+        type: "invoice_received",
         invoiceId: intake.id,
-        proposalId: line.id,
-        batchId: line.batchId,
         simulated: false,
       }),
     ]));
-    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow("non-demo records");
+    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow("disabled");
   });
 
   it("adds a confirmed line to the explicitly selected existing product", async () => {
@@ -259,16 +279,7 @@ describe("invoice review and confirmation", () => {
     });
     const intake = await uploadTestIntake(fields);
     const line = intake.proposals[0]!;
-    const confirmed = await dispatchAction({
-      type: "confirm_invoice_proposal",
-      payload: {
-        intakeId: intake.id,
-        proposalId: line.id,
-        fields: { ...line, matchedProductId: "product-milk" },
-        matchMode: "existing",
-        role: "owner",
-      },
-    });
+    const confirmed = await receiveTestLine(intake,{...line,matchedProductId:"product-milk"},"existing");
     expect(confirmed.state.products).toHaveLength(3);
     expect(confirmed.state.products.find((product) => product.id === "product-milk")?.batches.at(-1)).toMatchObject({
       id: line.batchId,

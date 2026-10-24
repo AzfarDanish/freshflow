@@ -69,6 +69,7 @@ export function expiryGroups(
   const expired: InventoryRow[] = [];
   const approaching: InventoryRow[] = [];
   for (const row of inventoryRows(products)) {
+    if(row.batch.quantity<=0||!row.batch.expiryDate)continue;
     const { group } = batchRisk(referenceDate, row.batch.expiryDate, thresholdDays);
     if (group === "expired") expired.push(row);
     else if (group === "approaching") approaching.push(row);
@@ -101,8 +102,6 @@ export function sortRecommendations(recommendations: Recommendation[]): Recommen
   return [...recommendations].sort((a, b) => {
     const pendingOrder = Number(b.status === "pending") - Number(a.status === "pending");
     if (pendingOrder) return pendingOrder;
-    const milkOrder = Number(b.batchId === "MILK-001") - Number(a.batchId === "MILK-001");
-    if (milkOrder) return milkOrder;
     return b.createdAt.localeCompare(a.createdAt);
   });
 }
@@ -134,6 +133,8 @@ export function taskInventorySummary(task: StaffTask, recommendation?: Recommend
 }
 
 export function activityActorLabel(actor: ActivityEvent["actor"]): string {
+  if(actor==="owner")return "Owner";
+  if(actor==="staff")return "Staff";
   if (actor === "simulated_owner") return "Owner (simulated role)";
   if (actor === "simulated_staff") return "Staff (simulated role)";
   return "System";

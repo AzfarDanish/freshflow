@@ -4,6 +4,7 @@ import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { InvoiceProposal } from "@/src/lib/types";
 
 export interface InvoiceExtractionResult {
+  rawText?: string;
   proposals: InvoiceProposal[];
   warnings: string[];
 }
@@ -278,10 +279,22 @@ function rowsFromDelimitedText(lines: string[]): InvoiceProposal[] {
 }
 
 function rowsFromLabeledText(lines: string[]): InvoiceProposal[] {
-  return lines
-    .map(parseLabeledLine)
-    .filter((fields): fields is Record<CanonicalField, string> => fields !== null)
-    .map(buildProposal);
+  const records:Record<CanonicalField,string>[]=[];
+  let fields=emptyFields();
+  const flush=()=>{if(fields.productName)records.push(fields);fields=emptyFields();};
+  // OCR commonly puts one explicit label/value on each line, unlike the
+  // original single-line semicolon format. Group only recognized labels;
+  // missing values remain missing rather than inferred from adjacent text.
+  for(const line of lines)for(const segment of line.split(/\s+\|\s+|\s*;\s*/)) {
+    const match=/^\s*([^:=]+)\s*[:=]\s*(.*?)\s*$/.exec(segment);
+    if(!match)continue;
+    const field=cellField(match[1]!);
+    if(!field)continue;
+    if((field==="productName"&&fields.productName)||(field==="sku"&&fields.sku&&fields.productName))flush();
+    fields[field]=match[2]!.trim();
+  }
+  flush();
+  return records.map(buildProposal);
 }
 
 async function parsePdfInvoice(bytes: Uint8Array): Promise<InvoiceExtractionResult> {
@@ -324,7 +337,8 @@ async function parsePdfInvoice(bytes: Uint8Array): Promise<InvoiceExtractionResu
   if (!textLines.length) {
     return {
       proposals: [],
-      warnings: ["No selectable text was found. Scanned/image-only PDFs are not supported; upload a text-based PDF or CSV."],
+      rawText: "",
+      warnings: ["No selectable text was found. OCR is required."],
     };
   }
 
@@ -333,11 +347,13 @@ async function parsePdfInvoice(bytes: Uint8Array): Promise<InvoiceExtractionResu
   if (!labeled.length) {
     return {
       proposals: [],
-      warnings: ["No supported line-item table or labeled product rows were recognized. Scanned/image-only PDFs are not supported."],
+      rawText: textLines.join("\n"),
+      warnings: ["No supported line-item table or labeled product rows were recognized. Review and enter the missing lines."],
     };
   }
   return {
     proposals: labeled,
+    rawText: textLines.join("\n"),
     warnings: labeled.some((proposal) => proposal.issues.length > 0)
       ? ["Check each highlighted field before confirming an inventory change."]
       : [],
@@ -351,4 +367,11 @@ export async function extractInvoice(
   return mimeType === "text/csv"
     ? parseCsvInvoice(bytes)
     : parsePdfInvoice(bytes);
+}
+
+export function parseInvoiceText(text:string):InvoiceExtractionResult {
+  const lines=text.split(/\r?\n/);
+  const proposals=rowsFromDelimitedText(lines);
+  const parsed=proposals.length?proposals:rowsFromLabeledText(lines);
+  return {proposals:parsed,rawText:text,warnings:parsed.length?["OCR fields are unverified. Review against the original document."]:["No line items could be identified reliably. Enter them during review; no values have been invented."]};
 }

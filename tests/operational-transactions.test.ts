@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSeedState } from "../src/lib/expiry";
+import { createSeedState } from "./fixtures/seed-state";
 import type { AppState } from "../src/lib/types";
 
 const database = vi.hoisted(() => ({

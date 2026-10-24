@@ -8,6 +8,12 @@
 
 # FreshFlow
 
+## Current operational implementation
+
+The runtime now uses authenticated business membership, an auditable stock-movement ledger, Owner-confirmed invoice receiving, and stored operational records rather than automatically seeded demo data.
+
+See [production transition and setup](docs/production-transition.md) for required authentication/AI configuration, permission boundaries, invoice limits, verification, and the reviewed legacy-data migration. Production readiness is **not** claimed until those configuration and signed-in checks are completed. Historical prototype and submission material below is retained for reference; it does not override the current runtime guide. The `submission/` directory is unchanged.
+
 > FreshFlow helps Malaysian micro and small grocers turn expiry-risk alerts and supplier invoice lines into reviewed, assigned, and reported inventory actions.
 
 ---

@@ -3,6 +3,7 @@ import { DEFAULT_BUSINESS_ID, getBusinessWorkspace } from "@/src/lib/businesses"
 import { getInvoiceDocument, getCurrentState } from "@/src/lib/store";
 import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
+import { requireIdentity, errorStatus } from "@/src/lib/identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,11 +13,12 @@ export async function GET(
   { params }: { params: Promise<{ intakeId: string }> },
 ) {
   try {
-    const role = roleFromRequest(request);
+    const identity = await requireIdentity(request);
+    const role = identity.role;
     requireActionPermission(role, "view_invoice_file");
     const { intakeId } = await params;
     const url = new URL(request.url);
-    const businessId = url.searchParams.get("businessId") ?? DEFAULT_BUSINESS_ID;
+    const businessId = identity.businessId;
     if (!getBusinessWorkspace(businessId)) {
       return NextResponse.json({ error: "That demo shop is not available." }, { status: 400 });
     }
@@ -39,7 +41,7 @@ export async function GET(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invoice file could not be loaded.";
-    const status = error instanceof AccessDeniedError ? 403 : 503;
+    const status = errorStatus(error);
     return NextResponse.json({ error: message }, { status });
   }
 }

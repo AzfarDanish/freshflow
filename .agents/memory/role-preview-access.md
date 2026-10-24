@@ -9,9 +9,9 @@ Keep the Owner/Staff switcher explicitly a testing/preview control, never produc
 
 **How to apply:** Keep truthful preview disclosures visible to both roles and enforce business-scoped permissions server-side independently of request payloads. Missing or invalid authenticated sessions must fail closed, not receive business data merely through a preview cookie; do not claim production readiness before real authentication and authorization are verified.
 
-The access matrix is definitive: Staff may view Overview, Inventory, Staff tasks, and Activity, and update task progress or complete tasks with outcomes. Only Owners may modify/delete inventory, view or decide recommendations, use invoice intake, change settings, or reset the demo. Both roles can update and complete staff tasks; do not reintroduce Staff-only completion or assignee-only restrictions.
+The access matrix is definitive: Staff may view Overview, Inventory, Staff tasks, and Activity, and update task progress or complete tasks with outcomes. Only Owners may modify/delete inventory, view or decide recommendations, use invoice intake/receiving, manage sales/waste and financial insights, change settings, or manage membership. Both roles can update and complete staff tasks; do not reintroduce Staff-only completion or assignee-only restrictions. Production demo restoration is disabled, not a permission granted to Owners.
 
-**Why:** The user explicitly grants both roles task progress and completion while denying Staff the other operations.
+**Why:** The user explicitly grants both roles task progress and completion while denying Staff the other operations; the production-transition brief removes demo restoration and adds Owner-only operational and financial management.
 
 **How to apply:** Keep pages, navigation, read responses, mutation routes, and underlying service checks consistent with the matrix.
 

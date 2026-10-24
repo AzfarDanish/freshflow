@@ -6,27 +6,20 @@ import {
 import { getCurrentState } from "@/src/lib/store";
 import { filterStateForRole } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
+import { requireIdentity, errorStatus } from "@/src/lib/identity";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const url = new URL(request.url);
-    const businessId =
-      url.searchParams.get("businessId") ?? DEFAULT_BUSINESS_ID;
-    if (!getBusinessWorkspace(businessId)) {
-      return NextResponse.json(
-        { error: "That demo shop is not available." },
-        { status: 400 },
-      );
-    }
-    const role = roleFromRequest(request);
-    return NextResponse.json(filterStateForRole(await getCurrentState(businessId), role), {
+    const identity = await requireIdentity(request);
+    const result = filterStateForRole(await getCurrentState(identity.businessId), identity.role);
+    return NextResponse.json({ ...result, actualRole: identity.actualRole }, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not load FreshFlow state.";
-    return NextResponse.json({ error: message }, { status: 503 });
+    return NextResponse.json({ error: message }, { status: errorStatus(error) });
   }
 }

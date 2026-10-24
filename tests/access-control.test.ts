@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createSeedState } from "./fixtures/seed-state";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ROLE_PERMISSIONS } from "../src/lib/access-control";
@@ -11,6 +12,11 @@ import {
 } from "../src/lib/role-session";
 
 vi.mock("server-only", () => ({}));
+vi.mock("../src/lib/identity",async(importOriginal)=>{
+  const actual=await importOriginal<typeof import("../src/lib/identity")>();
+  const session=await import("../src/lib/role-session");
+  return {...actual,requireIdentity:async(request?:Request)=>({userId:"verified-owner",businessId:"freshflow-demo",actualRole:"owner",role:request?.headers.get("cookie")?session.roleFromRequest(request):"owner"})};
+});
 
 let directory = "";
 let statePath = "";
@@ -18,6 +24,8 @@ beforeEach(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "freshflow-role-tests-"));
   statePath = path.join(directory, "state.json");
   process.env.FRESHFLOW_LOCAL_STATE_PATH = statePath;
+  vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+  await writeFile(statePath,JSON.stringify(createSeedState()));
 });
 afterEach(async () => {
   delete process.env.FRESHFLOW_LOCAL_STATE_PATH;
@@ -27,7 +35,7 @@ afterEach(async () => {
 describe("Owner and Staff permission matrix", () => {
   it("matches each page and mutation permission in the requirements", () => {
     expect(ROLE_PERMISSIONS.owner.pages).toEqual([
-      "overview", "decisions", "tasks", "activity", "invoices", "inventory", "settings",
+      "overview", "decisions", "tasks", "activity", "invoices", "inventory", "insights", "settings",
     ]);
     expect(ROLE_PERMISSIONS.staff.pages).toEqual([
       "overview", "tasks", "activity", "inventory",
@@ -141,7 +149,7 @@ describe("Owner and Staff permission matrix", () => {
       const progress = await progressResponse.json();
       expect(progress.state.tasks.find((task: { id: string }) => task.id === taskId))
         .toMatchObject({ progressType: "in_progress", progressNote: "Stock check started", status: "open" });
-      expect(progress.state.activity.at(-1).actor).toBe(`simulated_${role}`);
+      expect(progress.state.activity.at(-1).actor).toBe(role);
       const response = await POST(new Request("http://freshflow.test/api/action", {
         method: "POST",
         headers: { "Content-Type": "application/json", cookie },
@@ -153,7 +161,7 @@ describe("Owner and Staff permission matrix", () => {
       const saved = await response.json();
       expect(saved.role).toBe(role);
       expect(saved.state.tasks.find((task: { id: string }) => task.id === taskId).status).toBe("completed");
-      expect(saved.state.activity.at(-1).actor).toBe(`simulated_${role}`);
+      expect(saved.state.activity.at(-1).actor).toBe(role);
       if (role === "staff") {
         expect(saved.state.recommendations).toEqual([]);
         expect(saved.state.invoiceIntakes).toEqual([]);

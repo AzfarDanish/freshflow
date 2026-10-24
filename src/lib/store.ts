@@ -11,7 +11,7 @@ import {
 } from "@/src/lib/businesses";
 import { getPool } from "@/src/lib/db";
 import { requireActionPermission, roleBoundAction } from "@/src/lib/access-control";
-import { createBusinessSeedState, reconcileRisks } from "@/src/lib/expiry";
+import { createBusinessSeedState, currentBusinessDate, reconcileRisks } from "@/src/lib/expiry";
 import type {
   ActivityEvent,
   AppState,
@@ -26,6 +26,7 @@ import type {
   StateResponse,
   StaffTask,
 } from "@/src/lib/types";
+import { appendMovement, batchIdHasHistory } from "@/src/lib/operations";
 import {
   TASK_OUTCOME_LABELS, TASK_OUTCOME_TYPES, TASK_PROGRESS_LABELS, TASK_PROGRESS_TYPES,
 } from "@/src/lib/types";
@@ -91,7 +92,10 @@ function isAppState(value: unknown): value is AppState {
 }
 
 function normalizeAppState(value: AppState): AppState {
-  return { ...value, invoiceIntakes: value.invoiceIntakes ?? [] };
+  const today=currentBusinessDate(value.settings.timeZone);
+  const state={ ...value, invoiceIntakes: value.invoiceIntakes ?? [], movements:value.movements??[], suppliers:value.suppliers??[], settings:{...value.settings, demoDate:today,timeZone:value.settings.timeZone??"Asia/Kuala_Lumpur",currency:value.settings.currency??"MYR"} };
+  if(value.settings.demoDate!==today)reconcileRisks(state);
+  return state;
 }
 
 async function writeLocalState(
@@ -113,7 +117,7 @@ interface StateMutationResult<T> {
   value: T;
 }
 
-async function withBusinessState<T>(
+export async function withBusinessState<T>(
   businessId: string,
   operation: (
     state: AppState,
@@ -127,12 +131,13 @@ async function withBusinessState<T>(
     return exclusive(async () => {
       const stored = await readLocalState(business.id);
       const state = stored ?? createBusinessSeedState(business.id);
+      const original=JSON.stringify(state);
       const updated = await operation(
         normalizeAppState(state),
         null,
         "test_local",
       );
-      if (!readOnly || !stored) await writeLocalState(business.id, updated.state);
+      if (!readOnly || !stored || original!==JSON.stringify(updated.state)) await writeLocalState(business.id, updated.state);
       return updated.value;
     });
   }
@@ -166,12 +171,13 @@ async function withBusinessState<T>(
     if (!isAppState(stored)) {
       throw new Error("Replit PostgreSQL contains an invalid FreshFlow state row.");
     }
+    const original=JSON.stringify(stored);
     const updated = await operation(
       normalizeAppState(stored),
       client,
       "replit_postgres",
     );
-    if (!readOnly) {
+    if (!readOnly || original!==JSON.stringify(updated.state)) {
       await client.query(
         `UPDATE freshflow_business_state
          SET state = $1::jsonb, updated_at = now()
@@ -212,6 +218,12 @@ export async function createInvoiceIntake(
     if (state.invoiceIntakes.some((item) => item.id === intake.id)) {
       throw new Error("That invoice has already been uploaded.");
     }
+    const repeated=state.invoiceIntakes.find(item=>item.uploadRequestId&&item.uploadRequestId===intake.uploadRequestId);
+    if(repeated) {
+      if(repeated.sha256!==intake.sha256)throw new Error("Upload request reference conflicts with a different document.");
+      return {state,value:stateResponse(state,mode,businessId)};
+    }
+    if(state.invoiceIntakes.some(item=>item.sha256===intake.sha256))throw new Error("This document is already uploaded. Review the existing invoice instead.");
     for (const proposal of intake.proposals) {
       addProposalConflicts(state, intake, proposal);
     }
@@ -314,6 +326,7 @@ export async function dispatchAction(
   action: InventoryAction,
   businessId = DEFAULT_BUSINESS_ID,
   previewRole?: Role,
+  actorId?: string,
 ): Promise<StateResponse> {
   const payloadRole = action.payload && "role" in action.payload ? action.payload.role : undefined;
   const effectiveRole = previewRole ?? payloadRole ?? "owner";
@@ -322,6 +335,8 @@ export async function dispatchAction(
   return withBusinessState(businessId, async (state, _client, mode) => {
     const business = requireBusinessWorkspace(businessId);
     const now = new Date().toISOString();
+    const activityOffset = state.activity.length;
+    const beforeInventory=structuredClone(state.products);
     let nextState = state;
 
     switch (action.type) {
@@ -334,15 +349,26 @@ export async function dispatchAction(
       case "delete_inventory":
         deleteInventory(state, action.payload, now);
         break;
-      case "edit_invoice_proposal":
+      case "edit_invoice_proposal": {
+        const invoice=state.invoiceIntakes.find(i=>i.id===action.payload.intakeId);
+        const proposal=invoice?.proposals.find(p=>p.id===action.payload.proposalId);
+        if(invoice?.status==="cancelled"||invoice?.processingStatus==="processing"||(proposal?.receivedQuantity??0)>0)throw new Error("Use invoice review corrections for processing, cancelled, or posted invoice lines.");
+        const before=proposal?structuredClone(proposal):undefined;
         editInvoiceProposal(state, action.payload, now);
+        if(invoice&&before){invoice.corrections??=[];invoice.corrections.push({at:now,actorId:actorId??effectiveRole,reason:"Owner edited an unposted invoice draft",before});}
         break;
+      }
       case "confirm_invoice_proposal":
-        confirmInvoiceProposal(state, action.payload, now);
-        break;
-      case "discard_invoice_proposal":
+        throw new Error("Use explicit invoice receiving with physically received quantities and Owner confirmation.");
+      case "discard_invoice_proposal": {
+        const invoice=state.invoiceIntakes.find(i=>i.id===action.payload.intakeId);
+        const proposal=invoice?.proposals.find(p=>p.id===action.payload.proposalId);
+        if(invoice?.status==="cancelled"||invoice?.processingStatus==="processing"||(proposal?.receivedQuantity??0)>0)throw new Error("Reverse posted receipts before discarding a line; processing or cancelled invoices cannot be changed.");
+        const before=proposal?structuredClone(proposal):undefined;
         discardInvoiceProposal(state, action.payload, now);
+        if(invoice&&before){invoice.corrections??=[];invoice.corrections.push({at:now,actorId:actorId??effectiveRole,reason:"Owner discarded an unposted invoice line",before});}
         break;
+      }
       case "set_threshold":
         if (!Number.isInteger(action.payload.thresholdDays) || action.payload.thresholdDays < 1 || action.payload.thresholdDays > 14) {
           throw new Error("Expiry threshold must be a whole number from 1 to 14 days.");
@@ -371,28 +397,30 @@ export async function dispatchAction(
         updateTaskProgress(state, action.payload, now);
         break;
       case "reset": {
-        if (action.payload?.confirmed !== true) {
-          throw new Error("Confirm the whole-demo reset before continuing.");
-        }
-        if (!business.simulated || !containsOnlySyntheticRecords(state)) {
-          throw new Error(
-            "This shop contains non-demo records and cannot be reset as a demo.",
-          );
-        }
-        const resetState = createBusinessSeedState(business.id);
-        nextState = resetState;
-        addActivity(resetState, {
-          type: "demo_reset",
-          title: "Whole demo reset",
-          description: "All demo inventory, settings, recommendations, decisions, tasks and previous activity were restored to the initial dataset.",
-          occurredAt: now,
-        });
-        break;
+        throw new Error("Demo restoration is disabled. Production records cannot be reset with this action.");
       }
       default:
         assertNever(action);
     }
     reconcileRisks(nextState, now);
+    if(action.type==="add_inventory"||action.type==="edit_inventory"||action.type==="delete_inventory") {
+      const oldProduct=action.type==="add_inventory"?undefined:beforeInventory.find(p=>p.id===action.payload.productId);
+      const oldBatch=oldProduct?.batches.find(b=>b.id===(action.type==="edit_inventory"?action.payload.originalBatchId:action.type==="delete_inventory"?action.payload.batchId:""));
+      const product=action.type==="add_inventory"?nextState.products.find(p=>p.batches.some(b=>b.id===action.payload.batchId)):nextState.products.find(p=>p.id===action.payload.productId);
+      const batch=action.type==="delete_inventory"?undefined:product?.batches.find(b=>b.id===action.payload.batchId);
+      const delta=(batch?.quantity??0)-(oldBatch?.quantity??0);
+      const sourceProduct=product??oldProduct,sourceBatch=batch??oldBatch;
+      if(delta&&sourceProduct&&sourceBatch)appendMovement(nextState,{requestId:randomUUID(),productId:sourceProduct.id,batchId:sourceBatch.id,productName:sourceProduct.name,sku:sourceProduct.sku,unit:sourceProduct.unit,kind:"adjustment",quantity:delta,occurredAt:now,actorId:actorId??effectiveRole,reason:action.type==="delete_inventory"?"Owner deleted an inventory batch":action.type==="add_inventory"?"Manual inventory addition":"Owner corrected inventory quantity"});
+    }
+    if(action.type==="approve"||action.type==="reject"){
+      const recommendation=nextState.recommendations.find(r=>r.id===action.payload.recommendationId);
+      if(recommendation)recommendation.decisionBy=actorId??effectiveRole;
+    }
+    for(const event of nextState.activity.slice(activityOffset)) {
+      if(event.type!=="risk_detected") { event.actor=effectiveRole; event.actorId=actorId; }
+      event.simulated=false;
+      event.description=event.description.replaceAll("simulated owner","owner").replaceAll("simulated staff","staff");
+    }
     return {
       state: nextState,
       value: stateResponse(nextState, mode, business.id, effectiveRole),
@@ -400,7 +428,7 @@ export async function dispatchAction(
   });
 }
 
-function stateResponse(
+export function stateResponse(
   state: AppState,
   mode: PersistenceMode,
   businessId: string,
@@ -412,7 +440,7 @@ function stateResponse(
     persistenceMode: mode,
     businessId: business.id,
     business,
-    businesses: BUSINESS_WORKSPACES,
+    businesses: [business],
     role,
     recommendationCount: state.recommendations.length,
     pendingRecommendationCount: state.recommendations.filter((item) => item.status === "pending").length,
@@ -703,6 +731,7 @@ function addInventory(
   const category = input.category.trim();
   const unit = input.unit.trim();
   const batchId = input.batchId.trim().toUpperCase();
+  if(batchIdHasHistory(state,batchId))throw new Error("This batch identifier is reserved by existing history. Use a new batch identifier.");
   if (!productName || !sku || !category || !unit || !batchId) {
     throw new Error("Complete every product and batch field.");
   }
@@ -721,7 +750,7 @@ function addInventory(
       category,
       unit,
       batches: [],
-      simulated: true,
+      simulated: false,
     };
     state.products.push(product);
   } else if (product.unit.toLowerCase() !== unit.toLowerCase()) {
@@ -732,7 +761,7 @@ function addInventory(
 
   if (
     state.products.some((existing) =>
-      existing.batches.some((batch) => batch.id === batchId),
+      existing.batches.some((batch) => batch.id === batchId || batch.previousIds?.includes(batchId)),
     )
   ) {
     throw new Error("That batch ID is already in use.");
@@ -744,7 +773,7 @@ function addInventory(
     quantity: input.quantity,
     expiryDate: input.expiryDate,
     addedAt: now,
-    simulated: true,
+    simulated: false,
   });
   addActivity(state, {
     type: "inventory_added",
@@ -789,7 +818,7 @@ function editInventory(
   const batchConflict = state.products.some((item) =>
     item.batches.some(
       (other) =>
-        other !== batch && other.id.toUpperCase() === batchId,
+        other !== batch && (other.id.toUpperCase() === batchId || Boolean(other.previousIds?.includes(batchId))),
     ),
   );
   if (batchConflict) throw new Error("That batch ID is already in use.");
@@ -803,12 +832,15 @@ function editInventory(
     quantity: batch.quantity,
     expiryDate: batch.expiryDate,
   };
+  if(previous.batchId!==batchId&&!batch.previousIds?.includes(batchId)&&batchIdHasHistory(state,batchId))throw new Error("This batch identifier is reserved by existing history.");
   if (previous.productName === productName && previous.sku === sku &&
       previous.category === category && previous.unit === unit &&
       previous.batchId === batchId && previous.quantity === input.quantity &&
       previous.expiryDate === input.expiryDate) {
     throw new Error("No inventory changes to save.");
   }
+  if(previous.unit!==unit&&(state.movements??[]).some(m=>m.productId===product.id))throw new Error("Units cannot be rewritten after stock movements. Use a new product for a different unit.");
+  if(previous.batchId!==batchId)batch.previousIds=[...(batch.previousIds??[]),previous.batchId];
   product.name = productName;
   product.sku = sku;
   product.category = category;
@@ -1095,7 +1127,7 @@ function addActivity(
     ...input,
     actor: input.actor ?? "system",
     id: `event-${randomUUID()}`,
-    simulated: input.simulated ?? true,
+    simulated: input.simulated ?? false,
   });
 }
 

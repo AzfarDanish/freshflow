@@ -3,7 +3,7 @@ import type { OperationId } from "@/src/lib/operation-navigation";
 
 export const ROLE_PERMISSIONS = {
   owner: {
-    pages: ["overview", "decisions", "tasks", "activity", "invoices", "inventory", "settings"],
+    pages: ["overview", "decisions", "tasks", "activity", "invoices", "inventory", "insights", "settings"],
     actions: [
       "add_inventory", "edit_inventory", "edit_invoice_proposal",
       "delete_inventory",
@@ -54,7 +54,7 @@ export function filterStateForRole(response: StateResponse, role: Role): StateRe
   const recommendationCount = state.recommendations.length;
   const projectedState: AppState = role === "owner"
     ? state
-    : { ...state, recommendations: [], invoiceIntakes: [] };
+    : { ...state, recommendations: [], invoiceIntakes: [], movements: [], suppliers: [] };
   return {
     ...response,
     state: projectedState,

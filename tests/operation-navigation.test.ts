@@ -5,9 +5,9 @@ import { BUSINESS_WORKSPACES, DEFAULT_BUSINESS_ID } from "../src/lib/businesses"
 describe("operation routing", () => {
   it("gives every operation a unique, dedicated URL without anchors", () => {
     expect(OPERATIONS.map((operation) => operation.id)).toEqual([
-      "overview", "decisions", "tasks", "activity", "invoices", "inventory", "settings",
+      "overview", "decisions", "tasks", "activity", "invoices", "inventory", "insights", "settings",
     ]);
-    expect(new Set(OPERATIONS.map((operation) => operation.href)).size).toBe(7);
+    expect(new Set(OPERATIONS.map((operation) => operation.href)).size).toBe(8);
     for (const operation of OPERATIONS) {
       expect(operation.href).not.toContain("#");
       expect(operationForPath(operation.href)?.id).toBe(operation.id);
@@ -22,7 +22,7 @@ describe("operation routing", () => {
 
   it("retains FreshFlow as the sole available workspace", () => {
     expect(BUSINESS_WORKSPACES).toEqual([
-      { id: DEFAULT_BUSINESS_ID, name: "FreshFlow Demo Shop", simulated: true },
+      { id: DEFAULT_BUSINESS_ID, name: "Workspace", simulated: false },
     ]);
   });
 });

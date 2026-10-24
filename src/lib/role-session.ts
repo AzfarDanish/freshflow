@@ -53,9 +53,11 @@ export function roleFromRequest(request: Request): Role {
 }
 
 export async function requirePageRole(operation: OperationId): Promise<void> {
-  const cookieStore = await cookies();
-  const role = verifyPreviewRoleCookie(cookieStore.get(PREVIEW_ROLE_COOKIE)?.value);
-  if (!canAccessOperation(role, operation)) redirect("/");
+  try {
+    const { requireIdentity } = await import("./identity");
+    const identity = await requireIdentity();
+    if (!canAccessOperation(identity.role, operation)) redirect("/");
+  } catch { redirect("/"); }
 }
 
 export const previewRoleCookieOptions = {

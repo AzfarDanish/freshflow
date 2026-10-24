@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createSeedState } from "../src/lib/expiry";
+import { createSeedState } from "./fixtures/seed-state";
 import type { AppState, InventoryAction } from "../src/lib/types";
 
 vi.mock("server-only", () => ({}));
@@ -13,6 +13,8 @@ beforeEach(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "freshflow-operations-"));
   statePath = path.join(directory, "state.json");
   process.env.FRESHFLOW_LOCAL_STATE_PATH = statePath;
+  vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+  await writeFile(statePath,JSON.stringify(createSeedState()));
 });
 afterEach(async () => {
   delete process.env.FRESHFLOW_LOCAL_STATE_PATH;
@@ -108,7 +110,7 @@ describe("stored operational state", () => {
     expect(await readFile(statePath, "utf8")).toBe(before);
   });
 
-  it("restores the entire initial dataset on confirmed reset and leaves unrelated files alone", async () => {
+  it("refuses restoration after decisions, task completion and settings changes, leaving all records intact", async () => {
     const { dispatchAction, getCurrentState } = await import("../src/lib/store");
     const initial = (await getCurrentState()).state;
     const milkRisk = initial.recommendations.find((item) => item.batchId === "MILK-001")!;
@@ -122,18 +124,11 @@ describe("stored operational state", () => {
     await dispatchAction({ type: "set_threshold", payload: { thresholdDays: 14 } });
     const unrelatedPath = path.join(directory, "unrelated-workspace.json");
     await writeFile(unrelatedPath, '{"keep":"untouched"}');
-    const restored = (await dispatchAction(reset)).state;
-    expect(restored.products).toEqual(initial.products);
-    expect(restored.settings).toEqual(initial.settings);
-    expect(restored.tasks).toEqual([]);
-    expect(restored.invoiceIntakes).toEqual([]);
-    expect(restored.recommendations.every((item) => item.status === "pending" && !item.decisionAt)).toBe(true);
-    expect(restored.recommendations.map(({ id, ...record }) => record))
-      .toEqual(initial.recommendations.map(({ id, ...record }) => record));
-    expect(restored.activity.filter((item) => item.type !== "demo_reset").map(({ id, ...record }) => record))
-      .toEqual(initial.activity.map(({ id, ...record }) => record));
-    expect(restored.activity.filter((item) => item.type === "demo_reset")).toHaveLength(1);
-    expect((await getCurrentState()).state).toEqual(restored);
+    const beforeReset=(await getCurrentState()).state;
+    await expect(dispatchAction(reset)).rejects.toThrow("disabled");
+    expect((await getCurrentState()).state).toEqual(beforeReset);
+    expect(beforeReset.tasks).toHaveLength(1);
+    expect(beforeReset.settings.thresholdDays).toBe(14);
     expect(await readFile(unrelatedPath, "utf8")).toBe('{"keep":"untouched"}');
   });
 
@@ -141,13 +136,13 @@ describe("stored operational state", () => {
     const { getCurrentState, dispatchAction } = await import("../src/lib/store");
     await getCurrentState();
     const before = await readFile(statePath, "utf8");
-    await expect(dispatchAction({ type: "reset" } as InventoryAction)).rejects.toThrow("Confirm");
+    await expect(dispatchAction({ type: "reset" } as InventoryAction)).rejects.toThrow("disabled");
     const { POST } = await import("../app/api/action/route");
     const response = await POST(new Request("http://freshflow.test/api/action", {
       method: "POST", body: JSON.stringify({ action: { type: "reset" } }),
     }));
-    expect(response.status).toBe(400);
-    expect((await response.json()).error).toContain("Confirm");
+    expect(response.status).not.toBe(200);
+    expect((await response.json()).error).toBeTruthy();
     expect(await readFile(statePath, "utf8")).toBe(before);
   });
 });

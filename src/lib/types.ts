@@ -3,7 +3,7 @@ export type RecommendationStatus = "pending" | "approved" | "rejected";
 export type TaskStatus = "open" | "completed";
 export type TaskProgressType = "not_started" | "in_progress" | "blocked";
 export type RiskType = "expired" | "approaching";
-export type InvoiceIntakeStatus = "review" | "completed";
+export type InvoiceIntakeStatus = "review" | "completed" | "partial" | "cancelled" | "failed";
 export type InvoiceProposalStatus = "pending" | "confirmed" | "discarded";
 export type TaskOutcomeType =
   | "rotated"
@@ -12,7 +12,7 @@ export type TaskOutcomeType =
   | "no_action_taken"
   | "other";
 export type Role = "owner" | "staff";
-export type ActivityActor = "system" | "simulated_owner" | "simulated_staff";
+export type ActivityActor = "system" | "owner" | "staff" | "simulated_owner" | "simulated_staff";
 
 export const TASK_OUTCOME_TYPES: TaskOutcomeType[] = [
   "rotated",
@@ -40,7 +40,7 @@ export const TASK_PROGRESS_LABELS: Record<TaskProgressType, string> = {
 export interface BusinessWorkspace {
   id: string;
   name: string;
-  simulated: true;
+  simulated: boolean;
 }
 
 export interface InventoryBatch {
@@ -48,6 +48,8 @@ export interface InventoryBatch {
   productId: string;
   quantity: number;
   expiryDate: string;
+  expiryNotApplicable?: boolean;
+  previousIds?: string[];
   addedAt: string;
   simulated: boolean;
 }
@@ -119,12 +121,15 @@ export interface InvoiceProposal {
   status: InvoiceProposalStatus;
   issues: string[];
   matchedProductId?: string;
+  unitPriceMinor?: number;
+  taxMinor?: number;
+  receivedQuantity?: number;
 }
 
 export interface InvoiceIntake {
   id: string;
   fileName: string;
-  mimeType: "application/pdf" | "text/csv";
+  mimeType: "application/pdf" | "text/csv" | "image/png" | "image/jpeg";
   fileSizeBytes: number;
   sha256: string;
   uploadedAt: string;
@@ -132,6 +137,13 @@ export interface InvoiceIntake {
   warnings: string[];
   proposals: InvoiceProposal[];
   simulated: boolean;
+  header?: import("./operational-types").InvoiceHeader;
+  receipts?: import("./operational-types").InvoiceReceipt[];
+  corrections?: import("./operational-types").InvoiceCorrection[];
+  processingStatus?: "processing" | "review" | "failed" | "cancelled";
+  processingError?: string;
+  processingStartedAt?: string;
+  uploadRequestId?: string;
 }
 
 export interface ActivityEvent {
@@ -152,6 +164,14 @@ export interface ActivityEvent {
     | "invoice_proposal_confirmed"
     | "invoice_proposal_discarded"
     | "settings_changed"
+    | "movement_recorded"
+    | "movement_reversed"
+    | "invoice_received"
+    | "invoice_updated"
+    | "invoice_processing"
+    | "invoice_cancelled"
+    | "member_changed"
+    | "legacy_cleanup"
     | "demo_reset";
   title: string;
   description: string;
@@ -164,11 +184,14 @@ export interface ActivityEvent {
   invoiceId?: string;
   proposalId?: string;
   simulated: boolean;
+  actorId?: string;
 }
 
 export interface AppSettings {
   thresholdDays: number;
   demoDate: string;
+  timeZone?: string;
+  currency?: string;
 }
 
 export interface AppState {
@@ -178,6 +201,8 @@ export interface AppState {
   activity: ActivityEvent[];
   invoiceIntakes: InvoiceIntake[];
   settings: AppSettings;
+  movements?: import("./operational-types").StockMovement[];
+  suppliers?: import("./operational-types").Supplier[];
 }
 
 export interface InvoiceProposalInput {
@@ -287,4 +312,5 @@ export interface StateResponse {
   role?: Role;
   recommendationCount?: number;
   pendingRecommendationCount?: number;
+  actualRole?: Role;
 }

@@ -28,6 +28,8 @@ import { Sidebar } from "@/app/operations/Sidebar";
 import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/ui";
 import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
 import type { Role } from "@/app/operations/workflow";
+import { InventoryAssistant, InsightsPanel, TeamAccessPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
+import { InvoiceReceivingPanel } from "@/app/production/InvoiceReceivingPanel";
 
 type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "progress" | "complete" | "reset" | null;
 type InventorySelection = { product: Product; batch: InventoryBatch };
@@ -58,7 +60,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const modalOpenRef = useRef(false);
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
   const loadRequestId = useRef(0);
-  const businessId = DEFAULT_BUSINESS_ID;
+  const businessId = response?.businessId ?? DEFAULT_BUSINESS_ID;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -71,7 +73,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const [toastError, setToastError] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState(3);
   const [formError, setFormError] = useState("");
-  const [assignee, setAssignee] = useState("Aina");
+  const [assignee, setAssignee] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [outcomeType, setOutcomeType] = useState<TaskOutcomeType>("rotated");
   const [outcomeExplanation, setOutcomeExplanation] = useState("");
@@ -98,7 +100,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         : body.state.settings.thresholdDays,
     );
     responseRef.current = body;
-    setResponse(body);
+    setResponse(previous=>({...body,actualRole:body.actualRole??previous?.actualRole}));
     setRole(body.role ?? "staff");
   }, []);
 
@@ -107,8 +109,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     const requestId = ++loadRequestId.current;
     if (!background) setLoading(true);
     try {
-      const query = new URLSearchParams({ businessId: targetBusinessId });
-      const res = await fetch(`/api/state?${query}`, { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
+      const res = await fetch("/api/state", { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Could not load the latest shop state.");
       if (requestId !== loadRequestId.current) return;
@@ -136,8 +137,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
       });
       const roleBody = await roleResponse.json();
       if (!roleResponse.ok) throw new Error(roleBody?.error || "Could not change the preview role.");
-      const query = new URLSearchParams({ businessId });
-      const stateResponse = await fetch(`/api/state?${query}`, { cache: "no-store" });
+      const stateResponse = await fetch("/api/state", { cache: "no-store" });
       const stateBody = await stateResponse.json();
       if (!stateResponse.ok) throw new Error(stateBody?.error || "Could not load role permissions.");
       applyStoredState(stateBody as StateResponse);
@@ -446,7 +446,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           <p className="page-meta">
             <span><CalendarDays aria-hidden="true" />Reference date <strong>{dateLabel(referenceDate)}</strong></span>
             <span>Expiry threshold <strong>{thresholdDays} days</strong></span>
-            {role === "owner" ? <Link href="/settings"><Info aria-hidden="true" />Sample data and role preview</Link> : <span title="Seed records are synthetic. Preview roles are not real authentication."><Info aria-hidden="true" />Sample seed data · role preview</span>}
+            <span title="Business access is verified independently. Role preview can only narrow your real permissions."><Info aria-hidden="true" />Verified business access · testing preview</span>
           </p>
         </div>
         <div className="page-actions">
@@ -478,6 +478,8 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           </Section>
         </>}
 
+        {page === "overview" && !loading && <InventoryAssistant role={role} />}
+        {page === "insights" && <InsightsPanel products={state.products} onChanged={() => void loadState(businessId)} />}
         {page === "decisions" &&
           <Section id="decisions" icon={Sparkles} title="Decisions" description={role === "owner" ? "Review each rule-based recommendation, then approve or reject" : "Owner decisions on rule-based recommendations"} meta={loading ? undefined : `${pendingCount} pending`} className="scroll-panel">
             {loading ? <LoadingRows label="Loading recommendations" /> :
@@ -502,19 +504,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
         {page === "invoices" &&
         <div id="invoices" className="anchor-section">
-          <InvoiceIntakePanel
-            businessId={businessId}
-            drafts={invoiceDrafts}
-            setDrafts={setInvoiceDrafts}
-            role={role}
-            products={state.products}
-            intakes={state.invoiceIntakes}
-            busy={busy || loading}
-            onUpload={uploadInvoice}
-            onSaveProposal={saveInvoiceProposal}
-            onConfirmProposal={confirmInvoiceProposal}
-            onDiscardProposal={discardInvoiceProposal}
-          />
+          <InvoiceReceivingPanel state={state} onChanged={() => void loadState(businessId)} />
         </div>
         }
 
@@ -586,25 +576,17 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
             <div className="settings-block" id="workspace-data">
               <h3 className="block-title"><Info aria-hidden="true" />About this workspace</h3>
               <ul className="facts">
-                <li><strong>Sample data.</strong> Seed products, batches and staff names are synthetic. Uploaded invoices and owner-confirmed batches are stored as real records.</li>
-                <li><strong>Role preview.</strong> Owner and Staff preview roles are enforced for demo pages and actions, but are not sign-in or production authentication.</li>
-                <li><strong>Reference date.</strong> Expiry is calculated against the configured date shown above, not today&apos;s calendar date.</li>
+                <li><strong>Operational data.</strong> Inventory, receipts, movements, and audit history use persisted records. Unknown history and costs are not invented.</li>
+                <li><strong>Role preview.</strong> This testing control can only narrow your verified membership permissions. It is not sign-in.</li>
+                <li><strong>Reference date.</strong> Expiry uses today&apos;s calendar date in {state.settings.timeZone ?? "Asia/Kuala_Lumpur"}.</li>
                 <li><strong>Storage.</strong> {storageLabel}. There is no live POS or stock-system sync; completing a task never changes quantities.</li>
               </ul>
             </div>
           </div>
 
-          <div className="danger-zone">
-            <div>
-              <h3 className="block-title"><ShieldAlert aria-hidden="true" />Reset whole demo</h3>
-              <p className="block-text">
-                {resetAllowed
-                  ? "Restores all initial demo inventory, settings, recommendations, decisions, tasks and activity history together."
-                  : "Unavailable: this workspace contains uploaded invoices or other non-demo records. Reset never deletes them or performs a partial reset."}
-              </p>
-            </div>
-            <button type="button" className="btn btn-danger-outline btn-sm" onClick={() => openModal("reset")} disabled={busy || loading || !resetAllowed}><RotateCcw aria-hidden="true" />Reset whole demo…</button>
-          </div>
+          <TeamAccessPanel />
+          <LegacyCleanupReview onChanged={() => void loadState(businessId)} />
+          <div className="alert"><Info aria-hidden="true" />Dataset restoration is disabled for operational records. Legacy cleanup requires a reviewed backup and explicit migration confirmation.</div>
         </Section>
         }
       </>}
@@ -622,10 +604,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>
         <div className="top-actions">
           <div className="control" role="group" aria-labelledby="role-view-label">
-            <span className="control-label" id="role-view-label" title="Preview roles enforce demo permissions only. This is not sign-in or production authentication.">Role preview · not sign-in</span>
+            <span className="control-label" id="role-view-label" title="Testing only: preview permissions cannot exceed your verified business membership.">Testing preview · not sign-in</span>
             <div className="segmented">
               {(["owner", "staff"] as const).map((value) => (
-                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked}>
+                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked || (value==="owner" && response?.actualRole!=="owner")}>
                   {value === "owner" ? "Owner" : "Staff"}
                 </button>
               ))}

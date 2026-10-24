@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { classifyRisk, createSeedState } from "../src/lib/expiry";
+import { classifyRisk } from "../src/lib/expiry";
+import { createSeedState } from "./fixtures/seed-state";
 import type { AppState } from "../src/lib/types";
 
 vi.mock("server-only", () => ({}));
@@ -15,6 +16,8 @@ beforeEach(async () => {
     temporaryDirectory,
     "state.json",
   );
+  vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+  await writeFile(process.env.FRESHFLOW_LOCAL_STATE_PATH,JSON.stringify(createSeedState()));
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 });
@@ -102,13 +105,13 @@ describe("inventory action state transitions", () => {
     const approvalEvent = completed.state.activity.find((event) => event.type === "approved");
     const completionEvent = completed.state.activity.find((event) => event.type === "task_completed");
     expect(approvalEvent).toMatchObject({
-      actor: "simulated_owner",
+      actor: "owner",
       productId: "product-milk",
       batchId: "MILK-001",
       recommendationId: milkRisk!.id,
     });
     expect(completionEvent).toMatchObject({
-      actor: "simulated_staff",
+      actor: "staff",
       productId: "product-milk",
       batchId: "MILK-001",
       recommendationId: milkRisk!.id,
@@ -144,7 +147,7 @@ describe("inventory action state transitions", () => {
     expect(result.state.recommendations.find((item) => item.id === risk.id)?.status).toBe("rejected");
     expect(result.state.tasks).toHaveLength(0);
     expect(result.state.activity.at(-1)).toMatchObject({
-      actor: "simulated_owner",
+      actor: "owner",
       batchId: risk.batchId,
       recommendationId: risk.id,
     });
@@ -215,7 +218,7 @@ describe("inventory action state transitions", () => {
     expect((await getCurrentState()).state.tasks).toHaveLength(1);
   });
 
-  it("adds a batch, detects its risk, and restores the seed data on reset", async () => {
+  it("adds a batch, detects its risk, and refuses production dataset restoration", async () => {
     const { dispatchAction, getCurrentState } = await import("../src/lib/store");
     await getCurrentState();
     const added = await dispatchAction({
@@ -234,13 +237,10 @@ describe("inventory action state transitions", () => {
       added.state.recommendations.find((item) => item.batchId === "MILK-003")
         ?.riskType,
     ).toBe("approaching");
-    const reset = await dispatchAction({ type: "reset", payload: { confirmed: true } });
-    expect(reset.state.products.flatMap((product) => product.batches)).toHaveLength(
-      createSeedState().products.flatMap((product) => product.batches).length,
-    );
-    expect(reset.state.tasks).toHaveLength(0);
-    expect(reset.state.recommendations.some((item) => item.batchId === "MILK-003")).toBe(false);
-    expect(reset.state.activity.at(-1)?.type).toBe("demo_reset");
+    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow("disabled");
+    const retained=await getCurrentState();
+    expect(retained.state.products.flatMap(p=>p.batches)).toHaveLength(5);
+    expect(retained.state.recommendations.some(r=>r.batchId==="MILK-003")).toBe(true);
   });
 
   it("edits a batch and recalculates its pending expiry risk", async () => {
@@ -340,7 +340,7 @@ describe("inventory action state transitions", () => {
 
     const { dispatchAction } = await import("../src/lib/store");
     await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow(
-      "cannot be reset as a demo",
+      "disabled",
     );
     const persisted = JSON.parse(
       await readFile(process.env.FRESHFLOW_LOCAL_STATE_PATH!, "utf8"),

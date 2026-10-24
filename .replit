@@ -4,6 +4,7 @@ modules = ["python-3.12", "nodejs-24", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"
+packages = ["tesseract", "poppler"]
 
 [workflows]
 runButton = "Project"

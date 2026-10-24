@@ -6,8 +6,9 @@ import type {
 import { DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
 import { randomUUID } from "node:crypto";
 
-export const DEMO_DATE = "2026-10-24";
-const SEED_TIME = "2026-10-24T08:00:00.000Z";
+export function currentBusinessDate(timeZone = "Asia/Kuala_Lumpur"): string {
+  return new Intl.DateTimeFormat("en-CA", {timeZone,year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+}
 
 export function daysBetween(expiryDate: string, demoDate: string): number {
   const [expiryYear, expiryMonth, expiryDay] = expiryDate.split("-").map(Number);
@@ -30,91 +31,16 @@ export function classifyRisk(
   return null;
 }
 
-export function createSeedState(): AppState {
-  const state: AppState = {
-    products: [
-      {
-        id: "product-milk",
-        name: "Fresh milk",
-        sku: "MILK",
-        category: "Dairy",
-        unit: "bottles",
-        simulated: true,
-        batches: [
-          {
-            id: "MILK-001",
-            productId: "product-milk",
-            quantity: 8,
-            expiryDate: "2026-10-25",
-            addedAt: SEED_TIME,
-            simulated: true,
-          },
-          {
-            id: "MILK-002",
-            productId: "product-milk",
-            quantity: 24,
-            expiryDate: "2026-11-15",
-            addedAt: SEED_TIME,
-            simulated: true,
-          },
-        ],
-      },
-      {
-        id: "product-bread",
-        name: "Wholemeal bread",
-        sku: "BREAD",
-        category: "Bakery",
-        unit: "loaves",
-        simulated: true,
-        batches: [
-          {
-            id: "BREAD-004",
-            productId: "product-bread",
-            quantity: 5,
-            expiryDate: "2026-10-23",
-            addedAt: SEED_TIME,
-            simulated: true,
-          },
-        ],
-      },
-      {
-        id: "product-eggs",
-        name: "Grade A eggs",
-        sku: "EGG",
-        category: "Chilled",
-        unit: "trays",
-        simulated: true,
-        batches: [
-          {
-            id: "EGG-018",
-            productId: "product-eggs",
-            quantity: 6,
-            expiryDate: "2026-11-05",
-            addedAt: SEED_TIME,
-            simulated: true,
-          },
-        ],
-      },
-    ],
-    recommendations: [],
-    tasks: [],
-    activity: [],
-    invoiceIntakes: [],
-    settings: { thresholdDays: 7, demoDate: DEMO_DATE },
-  };
-  reconcileRisks(state, SEED_TIME);
-  return state;
-}
-
 export function createBusinessSeedState(businessId: string): AppState {
-  if (businessId === DEFAULT_BUSINESS_ID) return createSeedState();
   return {
     products: [],
     recommendations: [],
     tasks: [],
     activity: [],
     invoiceIntakes: [],
-    settings: { thresholdDays: 7, demoDate: DEMO_DATE },
+    movements: [],
+    suppliers: [],
+    settings: { thresholdDays: 7, demoDate: currentBusinessDate(), timeZone:"Asia/Kuala_Lumpur", currency:"MYR" },
   };
 }
 
@@ -126,7 +52,7 @@ export function reconcileRisks(
 
   // Pending recommendations describe current stock; decided records are history.
   const existingBatches = new Set(state.products.flatMap((product) =>
-    product.batches.map((batch) => `${product.id}:${batch.id}`),
+    product.batches.filter(b=>b.quantity>0&&b.expiryDate).map((batch) => `${product.id}:${batch.id}`),
   ));
   const retained = state.recommendations.filter((recommendation) =>
     recommendation.status !== "pending" ||
@@ -139,6 +65,7 @@ export function reconcileRisks(
 
   for (const product of state.products) {
     for (const batch of product.batches) {
+      if(batch.quantity<=0) continue;
       const risk = classifyRisk(
         batch.expiryDate,
         state.settings.demoDate,

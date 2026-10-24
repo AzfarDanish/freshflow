@@ -7,12 +7,12 @@ import type { LucideIcon } from "lucide-react";
 import { canAccessOperation } from "@/src/lib/access-control";
 import type { Role } from "@/src/lib/types";
 import {
-  Activity, ClipboardList, Database, FileText, Gauge, Leaf, Package, Settings2, Sparkles,
+  Activity, BarChart3, ClipboardList, Database, FileText, Gauge, Leaf, Package, Settings2, Sparkles,
 } from "lucide-react";
 
 const icons: Record<string, LucideIcon> = {
   overview: Gauge, decisions: Sparkles, tasks: ClipboardList, activity: Activity,
-  invoices: FileText, inventory: Package, settings: Settings2,
+  invoices: FileText, inventory: Package, insights:BarChart3, settings: Settings2,
 };
 
 export function Sidebar({ counts, storageLabel, locked, role }: { counts: Partial<Record<string, number>>; storageLabel: string; locked: boolean; role: Role }) {

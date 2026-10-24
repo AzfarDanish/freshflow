@@ -6,6 +6,7 @@ import {
 import { dispatchAction } from "@/src/lib/store";
 import { AccessDeniedError, filterStateForRole, requireActionPermission } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
+import { requireIdentity, rejectOtherBusiness, errorStatus } from "@/src/lib/identity";
 import {
   TASK_OUTCOME_TYPES,
   TASK_PROGRESS_TYPES,
@@ -288,6 +289,7 @@ function parseAction(input: unknown, role: "owner" | "staff"): InventoryAction {
 
 export async function POST(request: Request) {
   try {
+    const identity = await requireIdentity(request);
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > 16_384) {
       return NextResponse.json({ error: "Request is too large." }, { status: 413 });
@@ -300,30 +302,24 @@ export async function POST(request: Request) {
     }
     const actionEnvelope =
       isRecord(body) && "action" in body ? body.action : body;
-    const businessId =
-      isRecord(body) && typeof body.businessId === "string"
-        ? body.businessId
-        : DEFAULT_BUSINESS_ID;
+    const businessId = identity.businessId;
+    if(isRecord(body)) rejectOtherBusiness(body.businessId, identity);
     if (!getBusinessWorkspace(businessId)) {
       return NextResponse.json(
         { error: "That demo shop is not available." },
         { status: 400 },
       );
     }
-    const role = roleFromRequest(request);
+    const role = identity.role;
     const action = parseAction(actionEnvelope, role);
     requireActionPermission(role, action.type);
-    return NextResponse.json(filterStateForRole(await dispatchAction(action, businessId, role), role), {
+    return NextResponse.json(filterStateForRole(await dispatchAction(action, businessId, role, identity.userId), role), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "That action could not be saved.";
-    const status = error instanceof AccessDeniedError
-      ? 403
-      : message.includes("SESSION_SECRET")
-        ? 503
-        : 400;
+    const status = errorStatus(error);
     return NextResponse.json({ error: message }, { status });
   }
 }
