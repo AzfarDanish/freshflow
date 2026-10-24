@@ -33,10 +33,15 @@ outputType = "webview"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 180000
 
 [deployment]
-deploymentTarget = "cloudrun"
-run = "npm run dev"
+deploymentTarget = "autoscale"
+run = ["npm", "run", "start"]
+build = ["npm", "run", "build"]

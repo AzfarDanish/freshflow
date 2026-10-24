@@ -41,7 +41,7 @@ const DIALOG_TITLES: Record<Exclude<ModalKind, null>, string> = {
   approve: "Approve recommendation",
   reject: "Reject recommendation",
   complete: "Report task outcome",
-  reset: "Reset sample data",
+  reset: "Reset whole demo",
 };
 
 export default function OperationsWorkspace({ children }: { children: ReactNode }) {
@@ -514,14 +514,14 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
           <div className="danger-zone">
             <div>
-              <h3 className="block-title"><ShieldAlert aria-hidden="true" />Reset sample data</h3>
+              <h3 className="block-title"><ShieldAlert aria-hidden="true" />Reset whole demo</h3>
               <p className="block-text">
                 {resetAllowed
-                  ? "Restores the starting sample data and clears its activity history."
-                  : "Unavailable: this workspace contains uploaded invoices or other non-sample records, which reset never removes."}
+                  ? "Restores all initial demo inventory, settings, recommendations, decisions, tasks and activity history together."
+                  : "Unavailable: this workspace contains uploaded invoices or other non-demo records. Reset never deletes them or performs a partial reset."}
               </p>
             </div>
-            <button type="button" className="btn btn-danger-outline btn-sm" onClick={() => openModal("reset")} disabled={busy || loading || !resetAllowed}><RotateCcw aria-hidden="true" />Reset sample data…</button>
+            <button type="button" className="btn btn-danger-outline btn-sm" onClick={() => openModal("reset")} disabled={busy || loading || !resetAllowed}><RotateCcw aria-hidden="true" />Reset whole demo…</button>
           </div>
         </Section>
         }
@@ -606,10 +606,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>}
 
         {modal === "reset" && <div>
-          <div className="alert alert-danger compact"><AlertTriangle aria-hidden="true" /><span>All products, batches, recommendations, tasks and activity for <strong>{businessName}</strong> will be replaced with the starting sample data. This cannot be undone. The server refuses the reset if the shop contains uploaded invoices or other non-sample records.</span></div>
-          <label className="checkbox"><input type="checkbox" checked={resetAcknowledged} onChange={(event) => setResetAcknowledged(event.target.checked)} />I understand that {businessName}&apos;s current sample data and history will be cleared.</label>
+          <div className="alert alert-danger compact"><AlertTriangle aria-hidden="true" /><span>The entire demo dataset will be replaced: all inventory, settings, recommendations, decisions, tasks and previous activity. This cannot be undone. The server refuses this operation if any non-demo records or uploaded invoices are present. No unrelated workspace is affected.</span></div>
+          <label className="checkbox"><input type="checkbox" checked={resetAcknowledged} onChange={(event) => setResetAcknowledged(event.target.checked)} />I understand that the whole demo will be restored to its initial state.</label>
           {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
-          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy} data-autofocus>Keep current data</button><button type="button" className="btn btn-danger" onClick={() => void sendAction({ type: "reset", payload: { confirmed: true } }, "The whole demo was restored to its initial dataset.")} disabled={busy || !resetAcknowledged}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <RotateCcw aria-hidden="true" />}Reset sample data</button></div>
+          <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy} data-autofocus>Keep current data</button><button type="button" className="btn btn-danger" onClick={() => void sendAction({ type: "reset", payload: { confirmed: true } }, "The whole demo was restored to its initial dataset.")} disabled={busy || !resetAcknowledged}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <RotateCcw aria-hidden="true" />}Reset whole demo</button></div>
         </div>}
       </div>
     </div>}

@@ -136,18 +136,28 @@ async function withBusinessState<T>(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO freshflow_business_state (business_id, state)
-       VALUES ($1, $2::jsonb)
-       ON CONFLICT (business_id) DO NOTHING`,
-      [business.id, JSON.stringify(createBusinessSeedState(business.id))],
-    );
-    const result = await client.query<{ state: AppState }>(
+    let result = await client.query<{ state: AppState }>(
       `SELECT state FROM freshflow_business_state
        WHERE business_id = $1
        FOR UPDATE`,
       [business.id],
     );
+    if (!result.rows.length) {
+      // Seed only a workspace that has never been initialized, never on reads
+      // of an existing dataset. Concurrent first requests share the same row.
+      await client.query(
+        `INSERT INTO freshflow_business_state (business_id, state)
+         VALUES ($1, $2::jsonb)
+         ON CONFLICT (business_id) DO NOTHING`,
+        [business.id, JSON.stringify(createBusinessSeedState(business.id))],
+      );
+      result = await client.query<{ state: AppState }>(
+        `SELECT state FROM freshflow_business_state
+         WHERE business_id = $1
+         FOR UPDATE`,
+        [business.id],
+      );
+    }
     const stored = result.rows[0]?.state;
     if (!isAppState(stored)) {
       throw new Error("Replit PostgreSQL contains an invalid FreshFlow state row.");
@@ -331,7 +341,6 @@ export async function dispatchAction(
           description: `Upcoming expiry detection now includes batches within ${action.payload.thresholdDays} days.`,
           occurredAt: now,
         });
-        reconcileRisks(state, now);
         break;
       case "approve":
         approveRecommendation(state, action.payload, now);
@@ -671,6 +680,13 @@ function addInventory(
   const category = input.category.trim();
   const unit = input.unit.trim();
   const batchId = input.batchId.trim().toUpperCase();
+  if (!productName || !sku || !category || !unit || !batchId) {
+    throw new Error("Complete every product and batch field.");
+  }
+  if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 100_000) {
+    throw new Error("Quantity must be a whole number from 1 to 100,000.");
+  }
+  if (!isValidInventoryDate(input.expiryDate)) throw new Error("Enter a valid expiry date.");
   let product = state.products.find(
     (existing) => existing.sku.toUpperCase() === sku,
   );
@@ -687,6 +703,8 @@ function addInventory(
     state.products.push(product);
   } else if (product.unit.toLowerCase() !== unit.toLowerCase()) {
     throw new Error("Use the existing unit for this product SKU.");
+  } else if (product.name.toLowerCase() !== productName.toLowerCase() || product.category.toLowerCase() !== category.toLowerCase()) {
+    throw new Error("This SKU already exists. Use its stored product name and category, or edit the existing product.");
   }
 
   if (
@@ -762,6 +780,12 @@ function editInventory(
     quantity: batch.quantity,
     expiryDate: batch.expiryDate,
   };
+  if (previous.productName === productName && previous.sku === sku &&
+      previous.category === category && previous.unit === unit &&
+      previous.batchId === batchId && previous.quantity === input.quantity &&
+      previous.expiryDate === input.expiryDate) {
+    throw new Error("No inventory changes to save.");
+  }
   product.name = productName;
   product.sku = sku;
   product.category = category;
@@ -781,6 +805,19 @@ function editInventory(
     for (const task of state.tasks) {
       if (task.productId === product.id && task.batchId === previous.batchId) task.batchId = batch.id;
     }
+  }
+
+  // Open work uses current stock details. Completed reports remain historical.
+  for (const task of state.tasks) {
+    if (task.status !== "open" || task.productId !== product.id) continue;
+    const currentBatch = product.batches.find((item) => item.id === task.batchId);
+    if (!currentBatch) continue;
+    task.productName = product.name;
+    task.sku = product.sku;
+    task.unit = product.unit;
+    task.quantity = currentBatch.quantity;
+    task.expiryDate = currentBatch.expiryDate;
+    task.title = `${task.riskType === "expired" ? "Inspect" : "Rotate"} ${product.name} · ${currentBatch.id}`;
   }
 
   addActivity(state, {

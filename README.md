@@ -57,7 +57,15 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 
 Each operation has its own Next.js route: Overview (`/`, summary and expiry watchlist), Decisions (`/decisions`), Staff tasks (`/tasks`), Activity (`/activity`), Invoice intake (`/invoices`), Inventory (`/inventory`, searchable and filterable by expiry status), and Settings & data (`/settings`). Navigation replaces the page content, with browser back/forward and direct links supported. The charcoal sidebar and workspace header remain mounted, preserving loaded data, the simulated Owner/Staff view, inventory filters, expiry-rule drafts, and unsaved invoice edits during navigation. Only the selected operation scrolls; the sidebar and header stay visible. On narrow screens the sidebar becomes a horizontal bar and tables stack into labelled rows.
 
-FreshFlow Demo Shop is the sole available workspace. There is no shop selector or displayed shop name. Kedai Runcit Demo is no longer available through the application; its stored records are not deleted. Settings & data contains the expiry threshold, essential synthetic-data and simulated-role disclosures, and a separately confirmed sample-data reset.
+FreshFlow Demo Shop is the sole available workspace. There is no shop selector or displayed shop name. Kedai Runcit Demo is no longer available through the application; its stored records are not deleted. Settings & data contains the expiry threshold, essential synthetic-data and simulated-role disclosures, and a separately confirmed whole-demo reset.
+
+### Operational data and reset
+
+- PostgreSQL is the source of truth. Existing stored datasets are read without regenerating recommendations, activity, or inventory. Seed data is created only for an uninitialized workspace or an explicitly confirmed reset.
+- Successful actions persist their records and actual activity together in a transaction. Validation failures do not write changes. Pending risk recommendations are recalculated from stored inventory and settings during relevant mutations; open work reflects updated stock details, while completed outcomes and audit descriptions preserve history. Reporting a staff task never invents a stock adjustment.
+- The shared workspace state updates from each successful server response. Navigation, window focus, cross-tab notifications, and a 15-second visible-page refresh keep pages synchronized. A read started before a mutation cannot overwrite its result; unsaved settings and invoice drafts are retained during background reads.
+- Reset is available only in Settings & data. It requires a warning, acknowledgement, and server-side `payload: { confirmed: true }`. It atomically restores initial inventory, settings, pending recommendations, decisions, tasks, invoice-intake state, and initial activity history; a real reset audit entry records the operation. It is scoped to the demo workspace.
+- To protect non-demo data, reset refuses the entire operation when any non-synthetic record or uploaded invoice exists. It does not delete these records, partially reset around them, or modify unrelated workspaces.
 
 ### Tech Stack
 
@@ -163,6 +171,10 @@ npm run build
 npm run db:push
 python -m unittest discover tests
 ```
+
+### Publishing
+
+Publishing uses `npm run build` followed by `npm run start` on port 5000. The development preview continues to use `npm run dev`; do not use that development server as the publishing run command. Configuration changes take effect on the next publish.
 
 ### Scope and limitations
 
