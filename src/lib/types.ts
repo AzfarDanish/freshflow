@@ -1,4 +1,4 @@
-export type PersistenceMode = "replit_postgres" | "test_local";
+export type PersistenceMode = "postgres" | "test_local";
 export type RecommendationStatus = "pending" | "approved" | "rejected";
 export type TaskStatus = "open" | "completed";
 export type TaskProgressType = "not_started" | "in_progress" | "blocked";

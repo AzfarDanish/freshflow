@@ -169,13 +169,13 @@ export async function withBusinessState<T>(
     }
     const stored = result.rows[0]?.state;
     if (!isAppState(stored)) {
-      throw new Error("Replit PostgreSQL contains an invalid FreshFlow state row.");
+      throw new Error("PostgreSQL contains an invalid FreshFlow state row.");
     }
     const original=JSON.stringify(stored);
     const updated = await operation(
       normalizeAppState(stored),
       client,
-      "replit_postgres",
+      "postgres",
     );
     if (!readOnly || original!==JSON.stringify(updated.state)) {
       await client.query(

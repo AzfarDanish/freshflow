@@ -12,7 +12,7 @@ const globalDatabase = globalThis as typeof globalThis & {
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) {
     throw new Error(
-      "Replit PostgreSQL is unavailable. Run FreshFlow in a Replit environment with its managed database configured.",
+      "DATABASE_URL is required. For local development, set it to your PostgreSQL connection in .env.local (see .env.example); in Replit, connect the managed database. FreshFlow does not silently fall back to local files.",
     );
   }
   if (!globalDatabase.freshFlowPool) {

@@ -350,7 +350,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     ? taskInventorySummary(selectedTask, state.recommendations.find((item) => item.id === selectedTask.recommendationId))
     : "";
   const storageLabel = response
-    ? response.persistenceMode === "replit_postgres" ? "Saved to Replit PostgreSQL" : "Test-only local storage"
+    ? response.persistenceMode === "postgres" ? "Saved to PostgreSQL" : "Test-only local storage"
     : "Connecting to storage…";
 
   function openModal(kind: ModalKind, recommendation?: Recommendation, task?: StaffTask, inventory?: InventorySelection) {

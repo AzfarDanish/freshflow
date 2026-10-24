@@ -97,7 +97,7 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 .
 ├── app/                     # Next.js operations UI and API routes
 ├── src/lib/                 # Business registry, expiry, invoice extraction, database and types
-├── drizzle.config.ts        # Replit PostgreSQL schema configuration
+├── drizzle.config.ts        # PostgreSQL schema configuration
 ├── scripts/
 │   └── import-existing-state.ts # Non-destructive local/Supabase import utility
 ├── supabase/
@@ -127,7 +127,7 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 ### Architecture
 
 ```
-Browser ──► Next.js UI and API ──► Replit PostgreSQL
+Browser ──► Next.js UI and API ──► PostgreSQL
                                       ├── one JSON state row per demo shop
                                       └── private invoice-file rows (bytea)
 ```
@@ -153,12 +153,16 @@ cd your-project
 # 2. Install Node.js and dependencies
 npm ci
 
-# 3. Set DATABASE_URL in your shell environment (Replit injects it automatically).
-# .env.example lists the variable names; the database CLI reads the process environment.
-# Apply the schema to your development database:
-npm run db:push
+# 3. Start a local PostgreSQL server and create a database
+createdb freshflow
 
-# 4. Run the app
+# 4. Create your local environment file, then edit DATABASE_URL and SESSION_SECRET
+cp .env.example .env.local
+# Generate a development-only SESSION_SECRET with: openssl rand -hex 32
+# Example DATABASE_URL format: postgresql://USER:PASSWORD@localhost:5432/freshflow
+
+# 5. Apply the schema and run FreshFlow
+npm run db:push
 npm run dev
 ```
 
@@ -166,8 +170,8 @@ Open `http://localhost:5000`.
 
 ### Persistence and database setup
 
-- **Replit PostgreSQL is the runtime store.** The app requires `DATABASE_URL` and fails explicitly if it is unavailable; it does not silently switch to local files. Replit supplies this value for its managed database. Do not expose it to client code.
-- `SESSION_SECRET` is required to sign and verify preview-role cookies. Keep it server-only in Replit Secrets and available in production; changing it invalidates existing role previews, which fall back to Staff.
+- **PostgreSQL is the runtime store.** The app requires `DATABASE_URL`; Replit supplies its managed connection, while local development uses the connection in `.env.local`. The app does not silently fall back to local files. Keep local credentials out of version control and never expose the URL to client code.
+- `SESSION_SECRET` is required to sign and verify preview-role cookies. For local development, use a development-only random value. In Replit and production, keep it in server-side Secrets; changing it invalidates existing role previews, which fall back to Staff.
 - The read-only assistant uses `OPENROUTER_API_KEY` from Replit Secrets with the fixed OpenRouter model `deepseek/deepseek-v4-flash-0731` (DeepSeek V4 Flash 0731, not V4.1 Flash). Each question reads the current persisted business state; the model only selects a supported query, while answers and evidence are computed from those records. Assistant requests fail visibly if OpenRouter is unavailable.
 - `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the development database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Replit's Publish flow applies the development-to-production schema diff when you publish.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
@@ -202,7 +206,7 @@ Use this section for accurate team evidence. The app is configured to run throug
 
 - **Development:** The FreshFlow Next.js app runs from the repository's `.replit` configuration.
 - **Database:** Replit-managed PostgreSQL stores shop state and private invoice originals.
-- **Secrets:** `DATABASE_URL` is supplied by Replit. `OPENROUTER_API_KEY`, `SESSION_SECRET`, and any legacy Supabase credentials must stay server-side in Replit Secrets.
+- **Secrets:** `DATABASE_URL` comes from Replit's managed database or the local `.env.local` file. `OPENROUTER_API_KEY`, `SESSION_SECRET`, and any legacy Supabase credentials must remain server-side and must not be exposed to the client.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](submission/SDC2026_TeamName_Replit_POU.pdf)
 
