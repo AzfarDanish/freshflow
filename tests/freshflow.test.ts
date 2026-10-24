@@ -80,13 +80,12 @@ describe("inventory action state transitions", () => {
       type: "complete_task",
       payload: {
         taskId: task!.id,
-        outcome: "Rotated bottles to the front shelf",
+        outcomeType: "rotated",
         role: "staff",
       },
     });
-    expect(completed.state.tasks.find((item) => item.id === task!.id)?.outcome).toBe(
-      "Rotated bottles to the front shelf",
-    );
+    expect(completed.state.tasks.find((item) => item.id === task!.id)?.outcome).toBe("Rotated stock");
+    expect(completed.state.tasks.find((item) => item.id === task!.id)?.outcomeType).toBe("rotated");
     const afterQuantity = completed.state.products
       .flatMap((product) => product.batches)
       .find((batch) => batch.id === "MILK-001")?.quantity;
@@ -99,6 +98,32 @@ describe("inventory action state transitions", () => {
         "task_assigned",
         "task_completed",
       ]),
+    );
+    const approvalEvent = completed.state.activity.find((event) => event.type === "approved");
+    const completionEvent = completed.state.activity.find((event) => event.type === "task_completed");
+    expect(approvalEvent).toMatchObject({
+      actor: "simulated_owner",
+      productId: "product-milk",
+      batchId: "MILK-001",
+      recommendationId: milkRisk!.id,
+    });
+    expect(completionEvent).toMatchObject({
+      actor: "simulated_staff",
+      productId: "product-milk",
+      batchId: "MILK-001",
+      recommendationId: milkRisk!.id,
+      taskId: task!.id,
+    });
+    expect(task).toMatchObject({
+      productName: "Fresh milk",
+      batchId: "MILK-001",
+      quantity: 8,
+      unit: "bottles",
+      expiryDate: "2026-10-25",
+    });
+    const refreshed = await getCurrentState();
+    expect(refreshed.state.activity.filter((event) => event.type === "risk_detected")).toHaveLength(
+      starting.state.activity.filter((event) => event.type === "risk_detected").length,
     );
   });
 
@@ -118,7 +143,87 @@ describe("inventory action state transitions", () => {
     });
     expect(result.state.recommendations.find((item) => item.id === risk.id)?.status).toBe("rejected");
     expect(result.state.tasks).toHaveLength(0);
+    expect(result.state.activity.at(-1)).toMatchObject({
+      actor: "simulated_owner",
+      batchId: risk.batchId,
+      recommendationId: risk.id,
+    });
     expect(result.state.activity.at(-1)?.description).toContain("Owner will inspect first");
+    await expect(
+      dispatchAction({
+        type: "approve",
+        payload: { recommendationId: risk.id, assignedTo: "Aina", role: "owner" },
+      }),
+    ).rejects.toThrow("already been decided");
+    expect((await getCurrentState()).state.tasks).toHaveLength(0);
+  });
+
+  it("requires a valid staff outcome and explanation for Other", async () => {
+    const { dispatchAction, getCurrentState } = await import("../src/lib/store");
+    const initial = await getCurrentState();
+    const recommendation = initial.state.recommendations.find(
+      (item) => item.batchId === "MILK-001",
+    )!;
+    const approved = await dispatchAction({
+      type: "approve",
+      payload: {
+        recommendationId: recommendation.id,
+        assignedTo: "Aina",
+        role: "owner",
+      },
+    });
+    const task = approved.state.tasks[0]!;
+    const originalQuantity = approved.state.products
+      .flatMap((product) => product.batches)
+      .find((batch) => batch.id === "MILK-001")?.quantity;
+
+    await expect(
+      dispatchAction({
+        type: "complete_task",
+        payload: { taskId: task.id, outcomeType: "other", role: "staff" },
+      }),
+    ).rejects.toThrow("Explain the Other outcome");
+    await expect(
+      dispatchAction({
+        type: "complete_task",
+        payload: {
+          taskId: task.id,
+          outcomeType: "other",
+          outcomeExplanation: "   ",
+          role: "staff",
+        },
+      }),
+    ).rejects.toThrow("Explain the Other outcome");
+    await expect(
+      dispatchAction({
+        type: "complete_task",
+        payload: {
+          taskId: task.id,
+          outcomeType: "rotated",
+          role: "owner",
+        },
+      }),
+    ).rejects.toThrow("Switch to the Staff demo role");
+
+    const completed = await dispatchAction({
+      type: "complete_task",
+      payload: {
+        taskId: task.id,
+        outcomeType: "other",
+        outcomeExplanation: "Store reported a supplier pickup",
+        role: "staff",
+      },
+    });
+    const savedTask = completed.state.tasks.find((item) => item.id === task.id);
+    expect(savedTask).toMatchObject({
+      status: "completed",
+      outcomeType: "other",
+      outcomeExplanation: "Store reported a supplier pickup",
+      outcome: "Other: Store reported a supplier pickup",
+    });
+    expect(completed.state.products.flatMap((product) => product.batches).find((batch) => batch.id === "MILK-001")?.quantity).toBe(originalQuantity);
+    expect(completed.state.activity.filter((event) => event.type === "task_completed")).toHaveLength(1);
+    expect((await getCurrentState()).state.tasks).toHaveLength(1);
   });
 
   it("adds a batch, detects its risk, and restores the seed data on reset", async () => {
@@ -200,6 +305,10 @@ describe("inventory action state transitions", () => {
     const { dispatchAction, getCurrentState } = await import("../src/lib/store");
     const primary = await getCurrentState();
     const second = await getCurrentState("kedai-runcit-demo");
+    expect(second).toMatchObject({
+      businessId: "kedai-runcit-demo",
+      business: { name: "Kedai Runcit Demo" },
+    });
     expect(second.state.products).toHaveLength(0);
 
     await dispatchAction(
@@ -274,5 +383,36 @@ describe("inventory action state transitions", () => {
         payload: { recommendationId: risk.id, assignedTo: "Aina", role: "owner" },
       }),
     ).rejects.toThrow("already been decided");
+  });
+
+  it("does not create a second staff task or duplicate events when approval is retried", async () => {
+    const { dispatchAction, getCurrentState } = await import("../src/lib/store");
+    const initial = await getCurrentState();
+    const recommendation = initial.state.recommendations.find(
+      (item) => item.batchId === "MILK-001",
+    )!;
+    const approved = await dispatchAction({
+      type: "approve",
+      payload: {
+        recommendationId: recommendation.id,
+        assignedTo: "Aina",
+        role: "owner",
+      },
+    });
+    await expect(
+      dispatchAction({
+        type: "approve",
+        payload: {
+          recommendationId: recommendation.id,
+          assignedTo: "Aina",
+          role: "owner",
+        },
+      }),
+    ).rejects.toThrow("already been decided");
+    const refreshed = await getCurrentState();
+    expect(refreshed.state.tasks.filter((task) => task.recommendationId === recommendation.id)).toHaveLength(1);
+    expect(refreshed.state.activity.filter((event) => event.type === "approved" && event.recommendationId === recommendation.id)).toHaveLength(1);
+    expect(refreshed.state.activity.filter((event) => event.type === "task_created" && event.recommendationId === recommendation.id)).toHaveLength(1);
+    expect(approved.state.tasks).toHaveLength(1);
   });
 });

@@ -4,7 +4,11 @@ import {
   getBusinessWorkspace,
 } from "@/src/lib/businesses";
 import { dispatchAction } from "@/src/lib/store";
-import type { InventoryAction } from "@/src/lib/types";
+import {
+  TASK_OUTCOME_TYPES,
+  type InventoryAction,
+  type TaskOutcomeType,
+} from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +28,25 @@ function text(
     throw new Error(`${label} must be ${maxLength} characters or fewer.`);
   }
   return normalized;
+}
+
+function optionalText(value: unknown, label: string, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`${label} must be text.`);
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new Error(`${label} must be ${maxLength} characters or fewer.`);
+  }
+  return normalized || undefined;
+}
+
+function demoRole(
+  value: unknown,
+  defaultRole: "owner" | "staff",
+): "owner" | "staff" {
+  if (value === undefined) return defaultRole;
+  if (value === "owner" || value === "staff") return value;
+  throw new Error("Choose Owner or Staff demo role.");
 }
 
 function isValidDate(value: unknown): value is string {
@@ -115,33 +138,47 @@ function parseAction(input: unknown): InventoryAction {
         payload: {
           recommendationId: text(payload.recommendationId, "Recommendation", 100),
           assignedTo: text(payload.assignedTo, "Assignee", 60),
-          role: payload.role === "staff" ? "staff" : "owner",
+          role: demoRole(payload.role, "owner"),
         },
       };
     case "reject":
-      if (payload.reason !== undefined && typeof payload.reason !== "string") {
-        throw new Error("Rejection reason must be text.");
-      }
       return {
         type: "reject",
         payload: {
           recommendationId: text(payload.recommendationId, "Recommendation", 100),
-          reason:
-            typeof payload.reason === "string"
-              ? payload.reason.trim().slice(0, 250)
-              : undefined,
-          role: payload.role === "staff" ? "staff" : "owner",
+          reason: optionalText(payload.reason, "Rejection reason", 250),
+          role: demoRole(payload.role, "owner"),
         },
       };
-    case "complete_task":
+    case "complete_task": {
+      const outcomeType = payload.outcomeType;
+      if (
+        typeof outcomeType !== "string" ||
+        !TASK_OUTCOME_TYPES.includes(outcomeType as TaskOutcomeType)
+      ) {
+        throw new Error("Choose a valid staff-reported outcome.");
+      }
+      const outcomeExplanation = optionalText(
+        payload.outcomeExplanation,
+        "Outcome explanation",
+        500,
+      );
+      if (
+        outcomeType === "other" &&
+        (!outcomeExplanation || outcomeExplanation.length < 3)
+      ) {
+        throw new Error("Explain the Other outcome in at least 3 characters.");
+      }
       return {
         type: "complete_task",
         payload: {
           taskId: text(payload.taskId, "Task", 100),
-          outcome: text(payload.outcome, "Staff-reported outcome", 500),
-          role: payload.role === "owner" ? "owner" : "staff",
+          outcomeType: outcomeType as TaskOutcomeType,
+          outcomeExplanation,
+          role: demoRole(payload.role, "staff"),
         },
       };
+    }
     default:
       throw new Error("That action is not supported.");
   }

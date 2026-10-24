@@ -187,6 +187,7 @@ export function reconcileRisks(
         title: `${risk.riskType === "expired" ? "Expired stock" : "Expiry risk"} detected`,
         description: `${product.name} · batch ${batch.id} · ${batch.quantity} ${product.unit}. ${recommendation.explanation}`,
         occurredAt: now,
+        actor: "system",
         productId: product.id,
         batchId: batch.id,
         simulated: true,

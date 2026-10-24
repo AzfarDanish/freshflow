@@ -9,7 +9,8 @@ import {
   X, XCircle,
 } from "lucide-react";
 import { BUSINESS_WORKSPACES, DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
-import type { ActivityEvent, AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse } from "@/src/lib/types";
+import { TASK_OUTCOME_LABELS } from "@/src/lib/types";
+import type { ActivityEvent, AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType } from "@/src/lib/types";
 
 type Role = "owner" | "staff";
 type ModalKind = "add" | "edit" | "approve" | "reject" | "complete" | "reset" | null;
@@ -31,6 +32,25 @@ function dateTimeLabel(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${date.toLocaleDateString("en-MY", { day: "numeric", month: "short" })} · ${date.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function taskInventorySummary(
+  task: StaffTask,
+  recommendation?: Recommendation,
+): string {
+  const productName = task.productName ?? recommendation?.productName;
+  const sku = task.sku ?? recommendation?.sku;
+  const batchId = task.batchId ?? recommendation?.batchId;
+  const quantity = task.quantity ?? recommendation?.quantity;
+  const unit = task.unit ?? recommendation?.unit;
+  const expiryDate = task.expiryDate ?? recommendation?.expiryDate;
+  return [
+    productName,
+    sku,
+    batchId ? `Batch ${batchId}` : undefined,
+    quantity !== undefined ? `${quantity} ${unit ?? ""}`.trim() : undefined,
+    expiryDate ? `Expires ${dateLabel(expiryDate)}` : undefined,
+  ].filter(Boolean).join(" · ");
 }
 
 function daysBetween(from: string, to: string) {
@@ -83,6 +103,12 @@ function activityIcon(event: ActivityEvent) {
   }
 }
 
+function activityActorLabel(actor: ActivityEvent["actor"]): string {
+  if (actor === "simulated_owner") return "Simulated owner";
+  if (actor === "simulated_staff") return "Simulated staff";
+  return "System";
+}
+
 export default function HomePage() {
   const [response, setResponse] = useState<StateResponse | null>(null);
   const loadRequestId = useRef(0);
@@ -101,7 +127,8 @@ export default function HomePage() {
   const [formError, setFormError] = useState("");
   const [assignee, setAssignee] = useState("Aina");
   const [rejectReason, setRejectReason] = useState("");
-  const [outcome, setOutcome] = useState("");
+  const [outcomeType, setOutcomeType] = useState<TaskOutcomeType>("rotated");
+  const [outcomeExplanation, setOutcomeExplanation] = useState("");
   const [selectedInventory, setSelectedInventory] = useState<InventorySelection | null>(null);
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>("all");
@@ -176,6 +203,14 @@ export default function HomePage() {
   const openTasks = state.tasks.filter((task) => task.status === "open");
   const totalUnits = state.products.reduce((sum, product) => sum + product.batches.reduce((subtotal, batch) => subtotal + batch.quantity, 0), 0);
   const activity = [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const selectedTaskRecommendation = selectedTask
+    ? state.recommendations.find(
+        (item) => item.id === selectedTask.recommendationId,
+      )
+    : undefined;
+  const selectedTaskInventory = selectedTask
+    ? taskInventorySummary(selectedTask, selectedTaskRecommendation)
+    : "";
   const inventoryRows = state.products.flatMap((product) =>
     product.batches.map((batch) => ({ product, batch })),
   );
@@ -203,6 +238,11 @@ export default function HomePage() {
   function openModal(kind: ModalKind, recommendation?: Recommendation, task?: StaffTask, inventory?: InventorySelection) {
     setActionError("");
     setFormError("");
+    if (kind === "reject") setRejectReason("");
+    if (kind === "complete") {
+      setOutcomeType("rotated");
+      setOutcomeExplanation("");
+    }
     setSelectedRecommendation(recommendation ?? null);
     setSelectedTask(task ?? null);
     setSelectedInventory(inventory ?? null);
@@ -259,11 +299,22 @@ export default function HomePage() {
   }
   function completeTask() {
     if (!selectedTask) return;
-    if (outcome.trim().length < 3) {
-      setFormError("Add a short staff-reported outcome before completing the task.");
+    if (
+      outcomeType === "other" &&
+      outcomeExplanation.trim().length < 3
+    ) {
+      setFormError("Explain the Other outcome in at least 3 characters.");
       return;
     }
-    void sendAction({ type: "complete_task", payload: { taskId: selectedTask.id, outcome: outcome.trim(), role } }, "Task marked complete with a staff-reported outcome.");
+    void sendAction({
+      type: "complete_task",
+      payload: {
+        taskId: selectedTask.id,
+        outcomeType,
+        outcomeExplanation: outcomeExplanation.trim() || undefined,
+        role,
+      },
+    }, "Task marked complete with a staff-reported outcome.");
   }
   function changeThreshold() {
     void sendAction({ type: "set_threshold", payload: { thresholdDays: thresholdDraft } }, "Expiry threshold updated.");
@@ -302,7 +353,7 @@ export default function HomePage() {
             </select>
           </div>
           <div className="mode-pill" title={response?.persistenceMode === "supabase" ? "Persisted with Supabase" : "Stored in local demo mode"}><span className="mode-dot" />{response?.persistenceMode === "supabase" ? "Supabase" : "Local demo"}</div>
-          <div className="role-select"><label htmlFor="role">Demo role</label><select id="role" value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="owner">Owner</option><option value="staff">Staff</option></select><ChevronDown size={12} /></div>
+          <div className="role-select"><label htmlFor="role">Demo role</label><select id="role" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={busy || modal !== null}><option value="owner">Owner</option><option value="staff">Staff</option></select><ChevronDown size={12} /></div>
         </div>
       </header>
 
@@ -414,13 +465,13 @@ export default function HomePage() {
             <Panel id="tasks-panel">
               <div className="panel-head"><div><div className="panel-title"><ClipboardList />Staff work</div><div className="panel-subtitle">Approval creates a task; staff reports completion</div></div><span className="small-mono">{openTasks.length} OPEN</span></div>
               {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              state.tasks.length ? <div className="tasks-list">{[...state.tasks].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((task) => <TaskRow key={task.id} task={task} role={role} busy={busy} onComplete={() => { setOutcome(""); openModal("complete", undefined, task); }} />)}</div> : <div className="recommendation"><Empty>No staff tasks. Approve a pending recommendation to create one.</Empty></div>}
+              state.tasks.length ? <div className="tasks-list">{[...state.tasks].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} role={role} busy={busy} onComplete={() => openModal("complete", undefined, task)} />)}</div> : <div className="recommendation"><Empty>No staff tasks. Approve a pending recommendation to create one.</Empty></div>}
             </Panel>
 
             <Panel>
               <div className="panel-head"><div><div className="panel-title"><Activity />Activity log</div><div className="panel-subtitle">Newest events first · simulated records</div></div><span className="small-mono">{activity.length} EVENTS</span></div>
               {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
-              activity.length ? <div className="activity">{activity.map((event) => <div className="event" key={event.id}><div className="event-title">{event.title}</div><div className="event-desc">{event.description}</div><div className="event-time">{dateTimeLabel(event.occurredAt)}</div></div>)}</div> : <div className="recommendation"><Empty>No activity recorded yet.</Empty></div>}
+              activity.length ? <div className="activity">{activity.map((event) => <div className="event" key={event.id}><div className="event-title">{event.title}</div><div className="event-desc">{event.description}</div><div className="event-meta"><span>{activityActorLabel(event.actor)}</span>{event.batchId && <span>Batch {event.batchId}</span>}{event.recommendationId && <span>Recommendation linked</span>}{event.taskId && <span title={event.taskId}>Task linked</span>}<time dateTime={event.occurredAt}>{dateTimeLabel(event.occurredAt)}</time></div></div>)}</div> : <div className="recommendation"><Empty>No activity recorded yet.</Empty></div>}
             </Panel>
           </div>
         </div>
@@ -464,14 +515,15 @@ export default function HomePage() {
           <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-danger" onClick={rejectRecommendation} disabled={busy}>{busy ? <LoaderCircle /> : <XCircle />}Reject recommendation</button></div>
         </div>}
         {modal === "complete" && <div>
-          <div className="explain-box"><div className="explain-label">Task · {selectedTask?.assignedTo}</div><div className="explain-text">{selectedTask?.instruction}</div></div>
-          <div className="field" style={{ marginTop: 15 }}><label htmlFor="outcome">Staff-reported outcome</label><textarea id="outcome" value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What was reported as done?" /></div>
+          <div className="explain-box"><div className="explain-label">Task · {selectedTask?.assignedTo}</div>{selectedTaskInventory && <div className="task-inventory">{selectedTaskInventory}</div>}<div className="explain-text">{selectedTask?.instruction}</div></div>
+          <div className="field" style={{ marginTop: 15 }}><label htmlFor="outcomeType">Staff-reported outcome</label><select id="outcomeType" value={outcomeType} onChange={(event) => { setOutcomeType(event.target.value as TaskOutcomeType); setOutcomeExplanation(""); }}>{Object.entries(TASK_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+          {outcomeType === "other" && <div className="field"><label htmlFor="outcomeExplanation">Explain the Other outcome</label><textarea id="outcomeExplanation" value={outcomeExplanation} onChange={(event) => setOutcomeExplanation(event.target.value)} minLength={3} maxLength={500} required placeholder="Describe what staff reported" /></div>}
           <div className="decision-note"><AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />This is a simulated staff report only. No quantity adjustment is made.</div>
           {formError && <div className="form-error" role="alert">{formError}</div>}
           <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" onClick={completeTask} disabled={busy}>{busy ? <LoaderCircle /> : <Check />}Save reported outcome</button></div>
         </div>}
         {modal === "reset" && <div>
-          <div className="explain-box"><div className="explain-text">This replaces the current demo state with the server’s initial synthetic setup. Current simulated changes and event history will be cleared.</div></div>
+          <div className="explain-box"><div className="explain-text">This resets only the selected demo shop to its initial synthetic setup. Its simulated changes and event history will be cleared. Reset is refused if that shop contains non-demo records.</div></div>
           {formError && <div className="form-error" role="alert">{formError}</div>}
           <div className="dialog-actions"><button className="btn" onClick={() => setModal(null)} disabled={busy}>Keep current state</button><button className="btn btn-danger" onClick={() => void sendAction({ type: "reset" }, "Demo reset to its initial state.")} disabled={busy}>{busy ? <LoaderCircle /> : <RotateCcw />}Reset demo</button></div>
         </div>}
@@ -493,11 +545,13 @@ function RecommendationCard({ recommendation, role, busy, onApprove, onReject }:
   </div>;
 }
 
-function TaskRow({ task, role, busy, onComplete }: { task: StaffTask; role: Role; busy: boolean; onComplete: () => void }) {
+function TaskRow({ task, recommendation, role, busy, onComplete }: { task: StaffTask; recommendation?: Recommendation; role: Role; busy: boolean; onComplete: () => void }) {
+  const inventoryDetails = taskInventorySummary(task, recommendation);
   return <div className="task">
     <div className="task-line"><div className="task-name">{task.title}</div><div className="task-owner">{task.assignedTo}</div></div>
+    {inventoryDetails && <div className="task-inventory">{inventoryDetails}</div>}
     <div className="task-instruction">{task.instruction}</div>
     <div className="task-foot"><span className={`task-state ${task.status === "completed" ? "done" : ""}`}>{task.status}</span>{task.status === "open" && role === "staff" && <button className="btn btn-small" onClick={onComplete} disabled={busy}><Check />Report done</button>}{task.status === "open" && role === "owner" && <span className="task-owner">Switch to Staff to report</span>}</div>
-    {task.status === "completed" && task.outcome && <div className="reported"><b>Staff-reported outcome · no quantity adjustment</b>{task.outcome}</div>}
+    {task.status === "completed" && task.outcome && <div className="reported"><b>Staff-reported outcome · no quantity adjustment</b>{task.outcome}{task.outcomeExplanation && task.outcomeType !== "other" && <span className="reported-detail">{task.outcomeExplanation}</span>}</div>}
   </div>;
 }

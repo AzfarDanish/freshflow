@@ -2,6 +2,29 @@ export type PersistenceMode = "local_demo" | "supabase";
 export type RecommendationStatus = "pending" | "approved" | "rejected";
 export type TaskStatus = "open" | "completed";
 export type RiskType = "expired" | "approaching";
+export type TaskOutcomeType =
+  | "rotated"
+  | "removed_from_shelf"
+  | "reported_to_owner"
+  | "no_action_taken"
+  | "other";
+export type ActivityActor = "system" | "simulated_owner" | "simulated_staff";
+
+export const TASK_OUTCOME_TYPES: TaskOutcomeType[] = [
+  "rotated",
+  "removed_from_shelf",
+  "reported_to_owner",
+  "no_action_taken",
+  "other",
+];
+
+export const TASK_OUTCOME_LABELS: Record<TaskOutcomeType, string> = {
+  rotated: "Rotated stock",
+  removed_from_shelf: "Removed from shelf",
+  reported_to_owner: "Reported to owner",
+  no_action_taken: "No action taken",
+  other: "Other",
+};
 
 export interface BusinessWorkspace {
   id: string;
@@ -51,6 +74,14 @@ export interface Recommendation {
 export interface StaffTask {
   id: string;
   recommendationId: string;
+  productId?: string;
+  batchId?: string;
+  productName?: string;
+  sku?: string;
+  quantity?: number;
+  unit?: string;
+  expiryDate?: string;
+  riskType?: RiskType;
   title: string;
   instruction: string;
   assignedTo: string;
@@ -58,6 +89,8 @@ export interface StaffTask {
   createdAt: string;
   completedAt?: string;
   outcome?: string;
+  outcomeType?: TaskOutcomeType;
+  outcomeExplanation?: string;
   simulated: true;
 }
 
@@ -77,8 +110,11 @@ export interface ActivityEvent {
   title: string;
   description: string;
   occurredAt: string;
+  actor?: ActivityActor;
   productId?: string;
   batchId?: string;
+  recommendationId?: string;
+  taskId?: string;
   simulated: true;
 }
 
@@ -133,7 +169,12 @@ export type InventoryAction =
     }
   | {
       type: "complete_task";
-      payload: { taskId: string; outcome: string; role?: "owner" | "staff" };
+      payload: {
+        taskId: string;
+        outcomeType: TaskOutcomeType;
+        outcomeExplanation?: string;
+        role?: "owner" | "staff";
+      };
     }
   | { type: "reset" };
 

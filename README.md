@@ -50,7 +50,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 
 - **Expiry visibility** — Show expired stock separately from batches within a configurable expiry window.
 - **Human-reviewed actions** — Explain a recommendation and let the simulated owner approve or reject it.
-- **Accountable follow-through** — Assign work after approval, record a staff-reported outcome, and show simulated events chronologically.
+- **Accountable follow-through** — Assign work after approval, record a structured staff-reported outcome (with an explanation for “Other”), and show linked simulated events chronologically.
 
 ### Tech Stack
 
@@ -151,7 +151,7 @@ python -m unittest discover tests
 
 ### Scope and limitations
 
-All seed data, added inventory, role changes, recommendations, activity events, and staff-reported outcomes are synthetic. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a task never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
+All seed data, added inventory, role changes, recommendations, activity events, and staff-reported outcomes are synthetic. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a task records a staff report and never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
 
 ---
 

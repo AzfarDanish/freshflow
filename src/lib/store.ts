@@ -16,8 +16,10 @@ import type {
   PersistenceMode,
   Product,
   Recommendation,
+  StateResponse,
   StaffTask,
 } from "@/src/lib/types";
+import { TASK_OUTCOME_LABELS, TASK_OUTCOME_TYPES } from "@/src/lib/types";
 
 const SUPABASE_TABLE = "freshflow_business_state";
 
@@ -228,13 +230,7 @@ async function saveState(
 
 export async function getCurrentState(
   businessId = DEFAULT_BUSINESS_ID,
-): Promise<{
-  state: AppState;
-  persistenceMode: PersistenceMode;
-  businessId: string;
-  business: (typeof BUSINESS_WORKSPACES)[number];
-  businesses: typeof BUSINESS_WORKSPACES;
-}> {
+): Promise<StateResponse> {
   return exclusive(async () => {
     const business = requireBusinessWorkspace(businessId);
     const loaded = await loadState(business.id);
@@ -242,20 +238,14 @@ export async function getCurrentState(
     if (changed) {
       await saveState(business.id, loaded.state, loaded.mode);
     }
-    return {
-      state: loaded.state,
-      persistenceMode: loaded.mode,
-      businessId: business.id,
-      business,
-      businesses: BUSINESS_WORKSPACES,
-    };
+    return stateResponse(loaded.state, loaded.mode, business.id);
   });
 }
 
 export async function dispatchAction(
   action: InventoryAction,
   businessId = DEFAULT_BUSINESS_ID,
-): Promise<{ state: AppState; persistenceMode: PersistenceMode }> {
+): Promise<StateResponse> {
   return exclusive(async () => {
     const business = requireBusinessWorkspace(businessId);
     const loaded = await loadState(business.id);
@@ -302,15 +292,30 @@ export async function dispatchAction(
           occurredAt: now,
         });
         await saveState(business.id, resetState, loaded.mode);
-        return { state: resetState, persistenceMode: loaded.mode };
+        return stateResponse(resetState, loaded.mode, business.id);
       }
       default:
         assertNever(action);
     }
     reconcileRisks(state, now);
     await saveState(business.id, state, loaded.mode);
-    return { state, persistenceMode: loaded.mode };
+    return stateResponse(state, loaded.mode, business.id);
   });
+}
+
+function stateResponse(
+  state: AppState,
+  mode: PersistenceMode,
+  businessId: string,
+): StateResponse {
+  const business = requireBusinessWorkspace(businessId);
+  return {
+    state,
+    persistenceMode: mode,
+    businessId: business.id,
+    business,
+    businesses: BUSINESS_WORKSPACES,
+  };
 }
 
 function containsOnlySyntheticRecords(state: AppState): boolean {
@@ -457,12 +462,20 @@ function approveRecommendation(
   input: Extract<InventoryAction, { type: "approve" }>["payload"],
   now: string,
 ): void {
+  requireDemoRole(input.role, "owner");
   const recommendation = requirePendingRecommendation(
     state,
     input.recommendationId,
   );
+  if (
+    state.tasks.some((task) => task.recommendationId === recommendation.id)
+  ) {
+    throw new Error("This recommendation already has a linked staff task.");
+  }
   const assignedTo = input.assignedTo.trim();
-  if (!assignedTo) throw new Error("Choose a staff member for the task.");
+  if (!assignedTo || assignedTo.length > 60) {
+    throw new Error("Choose a staff member using 60 characters or fewer.");
+  }
   recommendation.status = "approved";
   recommendation.decisionAt = now;
   recommendation.decisionBy = "Simulated owner";
@@ -471,10 +484,22 @@ function approveRecommendation(
     title: "Recommendation approved",
     description: `${recommendation.productName} · batch ${recommendation.batchId} was approved by the simulated owner.`,
     occurredAt: now,
+    actor: "simulated_owner",
+    productId: recommendation.productId,
+    batchId: recommendation.batchId,
+    recommendationId: recommendation.id,
   });
   const task: StaffTask = {
     id: `task-${randomUUID()}`,
     recommendationId: recommendation.id,
+    productId: recommendation.productId,
+    batchId: recommendation.batchId,
+    productName: recommendation.productName,
+    sku: recommendation.sku,
+    quantity: recommendation.quantity,
+    unit: recommendation.unit,
+    expiryDate: recommendation.expiryDate,
+    riskType: recommendation.riskType,
     title: `${recommendation.riskType === "expired" ? "Inspect" : "Rotate"} ${recommendation.productName} · ${recommendation.batchId}`,
     instruction: recommendation.suggestedAction,
     assignedTo,
@@ -488,12 +513,21 @@ function approveRecommendation(
     title: "Staff task created",
     description: `${task.title} was created after owner approval.`,
     occurredAt: now,
+    productId: task.productId,
+    batchId: task.batchId,
+    recommendationId: task.recommendationId,
+    taskId: task.id,
   });
   addActivity(state, {
     type: "task_assigned",
     title: "Task assigned",
     description: `${task.title} was assigned to ${assignedTo}.`,
     occurredAt: now,
+    actor: "simulated_owner",
+    productId: task.productId,
+    batchId: task.batchId,
+    recommendationId: task.recommendationId,
+    taskId: task.id,
   });
 }
 
@@ -502,10 +536,19 @@ function rejectRecommendation(
   input: Extract<InventoryAction, { type: "reject" }>["payload"],
   now: string,
 ): void {
+  requireDemoRole(input.role, "owner");
   const recommendation = requirePendingRecommendation(
     state,
     input.recommendationId,
   );
+  if (
+    state.tasks.some((task) => task.recommendationId === recommendation.id)
+  ) {
+    throw new Error("This recommendation already has a linked staff task.");
+  }
+  if (input.reason && input.reason.length > 250) {
+    throw new Error("Rejection reason must be 250 characters or fewer.");
+  }
   recommendation.status = "rejected";
   recommendation.decisionAt = now;
   recommendation.decisionBy = "Simulated owner";
@@ -515,6 +558,10 @@ function rejectRecommendation(
     title: "Recommendation rejected",
     description: `${recommendation.productName} · batch ${recommendation.batchId} was rejected by the simulated owner.${reason ? ` Reason: ${reason}` : ""}`,
     occurredAt: now,
+    actor: "simulated_owner",
+    productId: recommendation.productId,
+    batchId: recommendation.batchId,
+    recommendationId: recommendation.id,
   });
 }
 
@@ -523,20 +570,49 @@ function completeTask(
   input: Extract<InventoryAction, { type: "complete_task" }>["payload"],
   now: string,
 ): void {
+  requireDemoRole(input.role, "staff");
   const task = state.tasks.find((item) => item.id === input.taskId);
   if (!task) throw new Error("Task not found.");
   if (task.status !== "open") throw new Error("This task is already complete.");
-  const outcome = input.outcome.trim();
-  if (!outcome) throw new Error("Enter the staff-reported outcome.");
+  if (!TASK_OUTCOME_TYPES.includes(input.outcomeType)) {
+    throw new Error("Choose a valid staff-reported outcome.");
+  }
+  const explanation = input.outcomeExplanation?.trim();
+  if (explanation && explanation.length > 500) {
+    throw new Error("Outcome explanation must be 500 characters or fewer.");
+  }
+  if (input.outcomeType === "other" && (!explanation || explanation.length < 3)) {
+    throw new Error("Explain the Other outcome in at least 3 characters.");
+  }
+  const outcome = explanation
+    ? `${TASK_OUTCOME_LABELS[input.outcomeType]}: ${explanation}`
+    : TASK_OUTCOME_LABELS[input.outcomeType];
   task.status = "completed";
   task.completedAt = now;
   task.outcome = outcome;
+  task.outcomeType = input.outcomeType;
+  task.outcomeExplanation = explanation;
   addActivity(state, {
     type: "task_completed",
     title: "Staff task completed",
     description: `${task.title} was marked complete by the simulated staff role. Reported outcome: ${outcome}. Inventory quantities were not changed.`,
     occurredAt: now,
+    actor: "simulated_staff",
+    productId: task.productId,
+    batchId: task.batchId,
+    recommendationId: task.recommendationId,
+    taskId: task.id,
   });
+}
+
+function requireDemoRole(
+  role: "owner" | "staff" | undefined,
+  expectedRole: "owner" | "staff",
+): void {
+  if (role !== expectedRole) {
+    const label = expectedRole === "owner" ? "Owner" : "Staff";
+    throw new Error(`Switch to the ${label} demo role to perform this action.`);
+  }
 }
 
 function requirePendingRecommendation(
@@ -559,6 +635,7 @@ function addActivity(
 ): void {
   state.activity.push({
     ...input,
+    actor: input.actor ?? "system",
     id: `event-${randomUUID()}`,
     simulated: true,
   });

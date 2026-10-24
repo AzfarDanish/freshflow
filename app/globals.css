@@ -102,19 +102,23 @@ h1{font-size:29px;letter-spacing:-1.2px;line-height:1.1;margin:7px 0 0;font-weig
 .task-line{display:flex;justify-content:space-between;gap:10px;align-items:start}
 .task-name{font-weight:800;font-size:11px;line-height:1.4}
 .task-owner{font:10px var(--mono);color:#88948a;white-space:nowrap}
+.task-inventory{font:9px var(--mono);color:#849085;margin-top:5px}
 .task-instruction{font-size:10px;line-height:1.5;color:#68796d;margin-top:5px}
 .task-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
 .task-state{font:9px var(--mono);text-transform:uppercase;letter-spacing:.5px;color:#8a9588}
 .task-state.done{color:#618248}
 .reported{border-left:2px solid #a8c779;background:#f2f5e9;padding:8px 10px;margin-top:9px;border-radius:0 6px 6px 0;color:#52664c;font-size:10px;line-height:1.5}
 .reported b{display:block;font:9px var(--mono);text-transform:uppercase;letter-spacing:.6px;color:#78934e;margin-bottom:3px}
+.reported-detail{display:block;margin-top:4px;color:#71806e}
 .activity{padding:6px 17px 13px}
 .event{position:relative;padding:11px 0 10px 20px;border-bottom:1px solid #edf0e6}
 .event:last-child{border-bottom:0}
 .event:before{content:"";position:absolute;left:2px;top:17px;width:7px;height:7px;background:#adc548;border-radius:50%;box-shadow:0 0 0 3px #eff3dc}
 .event-title{font-weight:800;font-size:10px}
 .event-desc{font-size:10px;color:#69796e;line-height:1.5;margin-top:3px}
-.event-time{font:9px var(--mono);color:#929c91;margin-top:5px}
+.event-meta{display:flex;align-items:center;flex-wrap:wrap;gap:5px 10px;font:9px var(--mono);color:#929c91;margin-top:6px}
+.event-meta span{color:#718071}
+.event-meta time{margin-left:auto}
 .footer-actions{display:flex;gap:8px;align-items:center}
 .icon-btn{border:0;background:transparent;color:#758576;padding:5px;border-radius:6px;display:inline-flex}
 .icon-btn:hover{background:#eff2e6;color:var(--forest)}
