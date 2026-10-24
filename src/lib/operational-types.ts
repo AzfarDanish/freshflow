@@ -20,6 +20,8 @@ export interface StockMovement {
   invoiceId?: string;
   proposalId?: string;
   reversesId?: string;
+  previousQuantity?: number;
+  correctedQuantity?: number;
 }
 export interface Supplier { id: string; name: string; reference?: string }
 export interface InvoiceHeader {
@@ -40,19 +42,40 @@ export interface InvoiceReceipt {
   lines: { proposalId: string; productId: string; batchId: string; quantity: number; expiryDate: string; unitCostMinor?: number }[];
 }
 export interface InvoiceCorrection { at: string; actorId: string; reason: string; before: unknown }
+export interface WasteByReason {
+  reason: string;
+  count: number;
+  quantityByUnit: Record<string, number>;
+  costMinor: number | null;
+}
+
+export interface ProductWasteBreakdown {
+  productId: string;
+  productName: string;
+  sku: string;
+  unit: string;
+  wastedQuantity: number;
+  wasteCostMinor: number | null;
+  unknownCostCount: number;
+  wasteEventsCount: number;
+}
+
 export interface OperationsSummary {
-  saleUnits: number;
   wasteUnits: number;
-  saleRevenueMinor: number | null;
   wasteCostMinor: number | null;
   unknownCosts: number;
-  unknownPrices: number;
   currency: string;
   from: string;
   to: string;
-  daily: { date: string; revenueMinor: number | null; wasteCostMinor: number | null; sales: number; waste: number }[];
+  daily: { date: string; wasteCostMinor: number | null; waste: number }[];
   limitations: string[];
-  quantityByUnit: Record<string, { sold: number; wasted: number }>;
+  quantityByUnit: Record<string, { wasted: number }>;
+  wasteByReason: WasteByReason[];
+  productBreakdown: ProductWasteBreakdown[];
+  // Deprecated/removed sales tracking fields
+  saleUnits?: number;
+  saleRevenueMinor?: number | null;
+  unknownPrices?: number;
 }
 export interface OperationsResponse {
   movements: StockMovement[];

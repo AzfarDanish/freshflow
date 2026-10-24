@@ -4,8 +4,12 @@ import {
   chunkRows,
   resolveConnectionUrls,
 } from "../scripts/migrate-postgres-to-supabase";
+import { ensureRlsPolicies } from "../scripts/ensure-rls-policies";
 
 describe("supabase migration tooling", () => {
+  it("requires DATABASE_URL when ensuring RLS policies", async () => {
+    await expect(ensureRlsPolicies("")).rejects.toThrow(/DATABASE_URL/);
+  });
   it("resolves migration-only connection URLs and refuses identical endpoints", () => {
     expect(() => resolveConnectionUrls({})).toThrow(/SOURCE_DATABASE_URL/);
     expect(() => resolveConnectionUrls({ SOURCE_DATABASE_URL: "postgresql://src" }))

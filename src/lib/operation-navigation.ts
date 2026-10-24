@@ -5,7 +5,7 @@ export const OPERATIONS = [
   { id: "activity", href: "/activity", label: "Activity" },
   { id: "invoices", href: "/invoices", label: "Invoice intake" },
   { id: "inventory", href: "/inventory", label: "Inventory" },
-  { id: "insights", href: "/insights", label: "Sales & waste" },
+  { id: "insights", href: "/insights", label: "Waste Insights" },
   { id: "settings", href: "/settings", label: "Settings & data" },
 ] as const;
 

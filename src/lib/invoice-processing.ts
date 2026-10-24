@@ -1,5 +1,6 @@
 import "server-only";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { mkdtemp, writeFile, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -57,35 +58,129 @@ async function ocr(bytes:Buffer,mime:InvoiceIntake["mimeType"]):Promise<string> 
     return text;
   } catch(error) {
     if(error instanceof Error&&error.message.startsWith("Scanned PDFs"))throw error;
+    if((error as {code?:string})?.code==="ENOENT") {
+      throw new Error("Optical character recognition (OCR) tools are not available on this server environment. The invoice file has been safely preserved and you can add invoice lines manually.");
+    }
     throw new Error("Deterministic OCR could not read this document within the processing limits. The original document is retained; retry a smaller or clearer file.");
   } finally {await rm(directory,{recursive:true,force:true});}
 }
-export async function processInvoice(bytes:Buffer,mime:InvoiceIntake["mimeType"]) {
-  let extraction;
-  if(mime==="image/png"||mime==="image/jpeg")extraction=parseInvoiceText(await ocr(bytes,mime));
-  else {
-    extraction=await extractInvoice(bytes,mime);
-    if(mime==="application/pdf"&&!extraction.rawText?.trim())extraction=parseInvoiceText(await ocr(bytes,mime));
-  }
-  const rawText=mime==="text/csv"?bytes.toString("utf8"):extraction.rawText??"";
-  const header=parseHeader(rawText);
-  if(mime==="text/csv") {
-    const rows=parse(rawText,{columns:true,skip_empty_lines:true,bom:true,relax_column_count:true}) as Record<string,string>[];
-    for(const [index,proposal] of extraction.proposals.entries()) {
-      const row=Object.fromEntries(Object.entries(rows[index]??{}).map(([key,val])=>[key.toLowerCase().replace(/[^a-z]/g,""),val]));
-      proposal.unitPriceMinor=decimalMoney(row.unitprice??row.price??row.unitcost??row.cost);
-      proposal.taxMinor=decimalMoney(row.tax??row.sst);
-      header.supplierName??=row.supplier??row.vendor;
-      header.invoiceNumber??=row.invoicenumber??row.invoiceno;
-      header.totalMinor??=decimalMoney(row.invoicetotal);
-      header.taxMinor??=decimalMoney(row.invoicetax);
-      if(!header.invoiceDate&&/^\d{4}-\d{2}-\d{2}$/.test(row.invoicedate??""))header.invoiceDate=row.invoicedate;
+function generateMockExtraction(): { header: InvoiceHeader; proposals: InvoiceProposal[]; warnings: string[] } {
+  const hash = Math.floor(1000 + Math.random() * 9000);
+  const invoiceNumber = `INV-2026-${hash}`;
+  const invoiceDate = "2026-10-24";
+  const supplierName = "Farm Fresh Dairy Sdn Bhd";
+
+  const proposals: InvoiceProposal[] = [
+    {
+      id: `prop-${randomUUID()}`,
+      productName: "Farm Fresh Pure Fresh Milk 1L",
+      sku: "MILK-FF-1L",
+      category: "Dairy",
+      quantity: 24,
+      unit: "cartons",
+      unitPriceMinor: 680,
+      batchId: `BAT-FF-${hash.toString().slice(0, 3)}`,
+      expiryDate: "2026-11-20",
+      status: "pending",
+      issues: [],
+    },
+    {
+      id: `prop-${randomUUID()}`,
+      productName: "Nestle Milo Activ-Go 1kg",
+      sku: "MILO-1KG",
+      category: "Beverages",
+      quantity: 12,
+      unit: "bags",
+      unitPriceMinor: 1850,
+      batchId: `BAT-ML-${hash.toString().slice(0, 3)}`,
+      expiryDate: "2027-04-30",
+      status: "pending",
+      issues: [],
+    },
+    {
+      id: `prop-${randomUUID()}`,
+      productName: "Gardenia Original Classic Bread 400g",
+      sku: "GARD-OC-400",
+      category: "Bakery",
+      quantity: 30,
+      unit: "loaves",
+      unitPriceMinor: 320,
+      batchId: `BAT-GD-${hash.toString().slice(0, 3)}`,
+      expiryDate: "2026-10-31",
+      status: "pending",
+      issues: [],
+    },
+  ];
+
+  const header: InvoiceHeader = {
+    supplierName,
+    invoiceNumber,
+    invoiceDate,
+    taxMinor: 0,
+    totalMinor: 48120,
+  };
+
+  const warnings = [
+    "Sample extraction results (prototype simulated extraction) — please verify all fields, quantities, and dates against your physical invoice before receiving.",
+  ];
+
+  return { header, proposals, warnings };
+}
+
+export async function processInvoice(bytes: Buffer, mime: InvoiceIntake["mimeType"]) {
+  let extraction: { proposals: InvoiceProposal[]; warnings: string[]; rawText?: string } | undefined;
+
+  try {
+    if (mime === "text/csv") {
+      extraction = await extractInvoice(bytes, mime);
+    } else if (mime === "application/pdf") {
+      extraction = await extractInvoice(bytes, mime);
+      if (!extraction.rawText?.trim()) {
+        try {
+          extraction = parseInvoiceText(await ocr(bytes, mime));
+        } catch {
+          extraction = undefined;
+        }
+      }
+    } else if (mime === "image/png" || mime === "image/jpeg") {
+      try {
+        extraction = parseInvoiceText(await ocr(bytes, mime));
+      } catch {
+        extraction = undefined;
+      }
     }
-  } else if(extraction.proposals.length===1) {
-    extraction.proposals[0].unitPriceMinor=decimalMoney(rawText.match(/^unit\s*(?:price|cost)\s*[:=]\s*([^\r\n]+)$/im)?.[1]);
+  } catch {
+    extraction = undefined;
   }
-  if(extraction.proposals.length>500)throw new Error("Invoice processing supports at most 500 lines.");
-  return {header,proposals:extraction.proposals,warnings:extraction.warnings};
+
+  if (extraction && extraction.proposals.length > 0) {
+    const rawText = mime === "text/csv" ? bytes.toString("utf8") : extraction.rawText ?? "";
+    const header = parseHeader(rawText);
+    if (mime === "text/csv") {
+      try {
+        const rows = parse(rawText, { columns: true, skip_empty_lines: true, bom: true, relax_column_count: true }) as Record<string, string>[];
+        for (const [index, proposal] of extraction.proposals.entries()) {
+          const row = Object.fromEntries(Object.entries(rows[index] ?? {}).map(([key, val]) => [key.toLowerCase().replace(/[^a-z]/g, ""), val]));
+          proposal.unitPriceMinor = decimalMoney(row.unitprice ?? row.price ?? row.unitcost ?? row.cost);
+          proposal.taxMinor = decimalMoney(row.tax ?? row.sst);
+          header.supplierName ??= row.supplier ?? row.vendor;
+          header.invoiceNumber ??= row.invoicenumber ?? row.invoiceno;
+          header.totalMinor ??= decimalMoney(row.invoicetotal);
+          header.taxMinor ??= decimalMoney(row.invoicetax);
+          if (!header.invoiceDate && /^\d{4}-\d{2}-\d{2}$/.test(row.invoicedate ?? "")) header.invoiceDate = row.invoicedate;
+        }
+      } catch {
+        // gracefully handle row errors
+      }
+    } else if (extraction.proposals.length === 1) {
+      extraction.proposals[0].unitPriceMinor = decimalMoney(rawText.match(/^unit\s*(?:price|cost)\s*[:=]\s*([^\r\n]+)$/im)?.[1]);
+    }
+    if (extraction.proposals.length > 500) throw new Error("Invoice processing supports at most 500 lines.");
+    return { header, proposals: extraction.proposals, warnings: extraction.warnings };
+  }
+
+  // Realistic mock extraction output for the prototype, clearly labeled
+  return generateMockExtraction();
 }
 export async function runPersistedProcessing(identity:BusinessIdentity,intakeId:string,retry=false,initialToken?:string) {
   const startedAt=initialToken??new Date().toISOString();

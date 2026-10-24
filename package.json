@@ -8,6 +8,7 @@
     "start": "next start --hostname 0.0.0.0 --port 5000",
     "test": "vitest run",
     "db:push": "drizzle-kit push",
+    "db:ensure-rls": "tsx scripts/ensure-rls-policies.ts",
     "db:import:local": "tsx scripts/import-existing-state.ts local",
     "db:migrate:supabase": "tsx scripts/migrate-postgres-to-supabase.ts"
   },

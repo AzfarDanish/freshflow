@@ -101,7 +101,7 @@ export function RecommendationCard({
         </div>
       )}
       {recommendation.status === "pending" && role === "staff" && (
-        <p className="item-note">Awaiting an owner decision. Switch to the Owner view to approve or reject.</p>
+        <p className="item-note">Awaiting manager decision. Switch to Manager view to approve or reject.</p>
       )}
       {recommendation.status !== "pending" && (
         <p className="item-note">

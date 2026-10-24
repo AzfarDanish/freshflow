@@ -1,6 +1,6 @@
 import "server-only";
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
@@ -223,7 +223,10 @@ export async function createInvoiceIntake(
       if(repeated.sha256!==intake.sha256)throw new Error("Upload request reference conflicts with a different document.");
       return {state,value:stateResponse(state,mode,businessId)};
     }
-    if(state.invoiceIntakes.some(item=>item.sha256===intake.sha256))throw new Error("This document is already uploaded. Review the existing invoice instead.");
+    const duplicate = state.invoiceIntakes.find(item => item.status !== "cancelled" && item.sha256 === intake.sha256);
+    if (duplicate) {
+      intake.warnings.push("Potential duplicate: An active invoice with identical document content is already in your records.");
+    }
     for (const proposal of intake.proposals) {
       addProposalConflicts(state, intake, proposal);
     }
@@ -320,6 +323,34 @@ export async function getInvoiceDocument(
         contents: document.contents,
       }
     : null;
+}
+
+export async function deleteInvoiceDocument(
+  businessId: string,
+  intakeId: string,
+  client?: PoolClient | null,
+): Promise<void> {
+  requireBusinessWorkspace(businessId);
+  if (!/^invoice-[a-f0-9-]{36}$/.test(intakeId)) {
+    throw new Error("Invoice reference is invalid.");
+  }
+  if (client) {
+    await client.query(
+      `DELETE FROM freshflow_invoice_documents WHERE business_id = $1 AND id = $2`,
+      [businessId, intakeId],
+    );
+  } else if (!useTestLocalStorage()) {
+    await getPool().query(
+      `DELETE FROM freshflow_invoice_documents WHERE business_id = $1 AND id = $2`,
+      [businessId, intakeId],
+    );
+  } else {
+    try {
+      await rm(localInvoicePath(businessId, intakeId), { force: true });
+    } catch {
+      // safe fallback
+    }
+  }
 }
 
 export async function dispatchAction(
@@ -933,11 +964,12 @@ function approveRecommendation(
   }
   recommendation.status = "approved";
   recommendation.decisionAt = now;
-  recommendation.decisionBy = "Simulated owner";
+  recommendation.decisionBy = "Manager";
+  const customInstruction = input.customInstruction?.trim();
   addActivity(state, {
     type: "approved",
     title: "Recommendation approved",
-    description: `${recommendation.productName} · batch ${recommendation.batchId} was approved by the simulated owner.`,
+    description: `${recommendation.productName} · batch ${recommendation.batchId} was approved by the manager${customInstruction ? ` with custom directive: "${customInstruction}"` : ""}.`,
     occurredAt: now,
     actor: "simulated_owner",
     productId: recommendation.productId,
@@ -956,7 +988,7 @@ function approveRecommendation(
     expiryDate: recommendation.expiryDate,
     riskType: recommendation.riskType,
     title: `${recommendation.riskType === "expired" ? "Inspect" : "Rotate"} ${recommendation.productName} · ${recommendation.batchId}`,
-    instruction: recommendation.suggestedAction,
+    instruction: customInstruction || recommendation.suggestedAction,
     assignedTo,
     status: "open",
     progressType: "not_started",
@@ -967,7 +999,7 @@ function approveRecommendation(
   addActivity(state, {
     type: "task_created",
     title: "Staff task created",
-    description: `${task.title} was created after owner approval.`,
+    description: `${task.title} was created after manager approval.`,
     occurredAt: now,
     productId: task.productId,
     batchId: task.batchId,

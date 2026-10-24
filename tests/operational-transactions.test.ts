@@ -20,7 +20,9 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("PostgreSQL operational transactions", () => {
   it("reads existing state without issuing seed inserts or state updates", async () => {
+    const { currentBusinessDate } = await import("../src/lib/expiry");
     const state = createSeedState();
+    state.settings.demoDate = currentBusinessDate();
     state.recommendations = [];
     state.activity = [];
     database.query.mockImplementation(async (sql: string) => ({

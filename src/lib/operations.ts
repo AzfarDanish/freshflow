@@ -82,62 +82,180 @@ export function applyOperationalAction(state: AppState, raw: unknown, identity: 
     addOperationalActivity(state,identity,"movement_reversed","Stock movement reversed",`${product.name} · ${batch.id}: ${reason}`,{productId:product.id,batchId:batch.id,invoiceId:original.invoiceId});
     return;
   }
-  if(action.type!=="record_movement")throw new Error("Unsupported operational action.");
-  const kind=payload.kind;
-  if(kind!=="sale"&&kind!=="waste"&&kind!=="adjustment")throw new Error("Choose sale, waste, or adjustment.");
-  const product=state.products.find(p=>p.id===payload.productId);
-  const batch=product?.batches.find(b=>b.id===payload.batchId);
-  if(!product||!batch)throw new Error("Product and batch must exist in this business.");
-  const amount=quantity(payload.quantity,kind==="adjustment");
-  const delta=kind==="adjustment"?amount:-amount;
-  const reason=requiredText(payload.reason,"Reason",500);
-  const unitPriceMinor=optionalMoney(payload.unitPriceMinor),unitCostMinor=optionalMoney(payload.unitCostMinor);
-  const occurredAt=requiredText(payload.occurredAt,"Operation date",40);
-  if(!Number.isFinite(Date.parse(occurredAt))||Date.parse(occurredAt)>Date.now()+300000)throw new Error("Enter a valid operation date that is not in the future.");
-  if(prior) {
-    if(prior.kind!==kind||prior.productId!==product.id||prior.batchId!==batch.id||prior.quantity!==delta||prior.reason!==reason||prior.unitPriceMinor!==unitPriceMinor||prior.unitCostMinor!==unitCostMinor||prior.occurredAt!==occurredAt)throw new Error("Request reference conflicts with another operation.");
+  const isMovement = action.type === "record_movement" || action.type === "record_waste" || action.type === "record_correction";
+  if (!isMovement) throw new Error("Unsupported operational action.");
+  const kind = action.type === "record_waste" ? "waste" : action.type === "record_correction" ? "adjustment" : payload.kind;
+  if (kind === "sale") throw new Error("Manual sale recording is disabled. FreshFlow manages inventory exceptions, waste, and stock corrections.");
+  if (kind !== "waste" && kind !== "adjustment") throw new Error("Choose waste or adjustment.");
+  const product = state.products.find(p => p.id === payload.productId);
+  const batch = product?.batches.find(b => b.id === payload.batchId);
+  if (!product || !batch) throw new Error("Product and batch must exist in this business.");
+
+  if (kind === "waste") {
+    const amount = quantity(payload.quantity, false);
+    if (amount > batch.quantity) throw new Error(`Waste quantity (${amount} ${product.unit}) cannot exceed current batch stock (${batch.quantity} ${product.unit}).`);
+    const delta = -amount;
+    const reason = requiredText(payload.reason, "Reason", 500);
+    const unitCostMinor = optionalMoney(payload.unitCostMinor);
+    const occurredAt = requiredText(payload.occurredAt, "Operation date", 40);
+    if (!Number.isFinite(Date.parse(occurredAt)) || Date.parse(occurredAt) > Date.now() + 300000) throw new Error("Enter a valid operation date that is not in the future.");
+    if (prior) {
+      if (prior.kind !== "waste" || prior.productId !== product.id || prior.batchId !== batch.id || prior.quantity !== delta || prior.reason !== reason || prior.unitCostMinor !== unitCostMinor || prior.occurredAt !== occurredAt) throw new Error("Request reference conflicts with another operation.");
+      return;
+    }
+    const next = (Math.round(batch.quantity * 10000) - Math.round(amount * 10000)) / 10000;
+    if (next < 0) throw new Error("There is not enough stock in this batch.");
+    batch.quantity = next;
+    appendMovement(state, { requestId, productId: product.id, batchId: batch.id, productName: product.name, sku: product.sku, unit: product.unit, kind: "waste", quantity: delta, reason, unitCostMinor, occurredAt, actorId: identity.userId });
+    addOperationalActivity(state, identity, "movement_recorded", "Waste recorded", `${product.name} · ${batch.id} · ${amount} ${product.unit}. ${reason}`, { productId: product.id, batchId: batch.id });
     return;
   }
-  const next=(Math.round(batch.quantity*10000)+Math.round(delta*10000))/10000;
-  if(next<0)throw new Error("There is not enough stock in this batch.");
-  batch.quantity=next;
-  appendMovement(state,{requestId,productId:product.id,batchId:batch.id,productName:product.name,sku:product.sku,unit:product.unit,kind,quantity:delta,reason,unitPriceMinor,unitCostMinor,occurredAt,actorId:identity.userId});
-  addOperationalActivity(state,identity,"movement_recorded",`${kind==="sale"?"Sale":kind==="waste"?"Waste":"Stock adjustment"} recorded`,`${product.name} · ${batch.id} · ${delta} ${product.unit}. ${reason}`,{productId:product.id,batchId:batch.id});
+
+  // Stock discrepancy correction
+  const reason = requiredText(payload.reason, "Correction reason", 500);
+  const previousQuantity = batch.quantity;
+  let delta: number;
+  let correctedQuantity: number;
+  if (payload.correctedQuantity !== undefined) {
+    correctedQuantity = quantity(payload.correctedQuantity, false);
+    delta = Math.round((correctedQuantity - previousQuantity) * 10000) / 10000;
+    if (delta === 0) throw new Error("Corrected quantity is identical to current batch stock. No discrepancy detected.");
+  } else {
+    delta = quantity(payload.quantity, true);
+    correctedQuantity = Math.round((previousQuantity + delta) * 10000) / 10000;
+    if (correctedQuantity < 0) throw new Error("Correction would make stock negative.");
+  }
+  const unitCostMinor = optionalMoney(payload.unitCostMinor);
+  const occurredAt = requiredText(payload.occurredAt, "Operation date", 40);
+  if (!Number.isFinite(Date.parse(occurredAt)) || Date.parse(occurredAt) > Date.now() + 300000) throw new Error("Enter a valid operation date that is not in the future.");
+  if (prior) {
+    if (prior.kind !== "adjustment" || prior.productId !== product.id || prior.batchId !== batch.id || prior.quantity !== delta || prior.reason !== reason || prior.unitCostMinor !== unitCostMinor || prior.occurredAt !== occurredAt) throw new Error("Request reference conflicts with another operation.");
+    return;
+  }
+  batch.quantity = correctedQuantity;
+  appendMovement(state, { requestId, productId: product.id, batchId: batch.id, productName: product.name, sku: product.sku, unit: product.unit, kind: "adjustment", quantity: delta, previousQuantity, correctedQuantity, reason, unitCostMinor, occurredAt, actorId: identity.userId });
+  const diffStr = delta > 0 ? `+${delta}` : `${delta}`;
+  addOperationalActivity(state, identity, "movement_recorded", "Stock discrepancy correction recorded", `${product.name} · ${batch.id}: corrected from ${previousQuantity} to ${correctedQuantity} ${product.unit} (${diffStr} ${product.unit}). Reason: ${reason}`, { productId: product.id, batchId: batch.id });
 }
 
 export function operationalReport(state: AppState, from: string, to: string): OperationsResponse {
-  validDate(from);validDate(to);
-  if(from>to)throw new Error("The start date must not follow the end date.");
-  if((Date.parse(to)-Date.parse(from))/86400000>366)throw new Error("Choose a period of at most 366 days.");
-  const all=state.movements??[];
-  const zone=state.settings.timeZone??"Asia/Kuala_Lumpur";
-  const movements=all.filter(m=>{const day=businessDate(m.occurredAt,zone);return day>=from&&day<=to;});
-  const summary={saleUnits:0,wasteUnits:0,saleRevenueMinor:0 as number|null,wasteCostMinor:0 as number|null,unknownCosts:0,unknownPrices:0,currency:state.settings.currency??"MYR",from,to,daily:[] as OperationsResponse["summary"]["daily"],limitations:[] as string[],quantityByUnit:{} as Record<string,{sold:number;wasted:number}>};
-  const days=new Map<string,OperationsResponse["summary"]["daily"][number]>();
-  for(const movement of movements) {
-    const original=movement.kind==="reversal"?all.find(m=>m.id===movement.reversesId):movement;
-    if(!original||!(original.kind==="sale"||original.kind==="waste"))continue;
-    const sign=movement.kind==="reversal"?-1:1;
-    const qty=Math.abs(movement.quantity)*sign;
-    const date=businessDate(movement.occurredAt,zone);
-    const day=days.get(date)??{date,revenueMinor:0,wasteCostMinor:0,sales:0,waste:0};
-    const byUnit=summary.quantityByUnit[movement.unit]??={sold:0,wasted:0};
-    if(original.kind==="sale") {
-      summary.saleUnits+=qty;day.sales+=qty;byUnit.sold+=qty;
-      if(original.unitPriceMinor===undefined){summary.unknownPrices++;summary.saleRevenueMinor=null;day.revenueMinor=null;}
-      else{const amount=Math.round(Math.abs(movement.quantity)*original.unitPriceMinor)*sign;if(summary.saleRevenueMinor!==null)summary.saleRevenueMinor+=amount;if(day.revenueMinor!==null)day.revenueMinor+=amount;}
+  validDate(from); validDate(to);
+  if (from > to) throw new Error("The start date must not follow the end date.");
+  if ((Date.parse(to) - Date.parse(from)) / 86400000 > 366) throw new Error("Choose a period of at most 366 days.");
+  const all = state.movements ?? [];
+  const zone = state.settings.timeZone ?? "Asia/Kuala_Lumpur";
+  const movements = all.filter(m => { const day = businessDate(m.occurredAt, zone); return day >= from && day <= to; });
+  const summary: OperationsResponse["summary"] = {
+    wasteUnits: 0,
+    wasteCostMinor: 0 as number | null,
+    unknownCosts: 0,
+    currency: state.settings.currency ?? "MYR",
+    from,
+    to,
+    daily: [],
+    limitations: [],
+    quantityByUnit: {},
+    wasteByReason: [],
+    productBreakdown: [],
+  };
+  const days = new Map<string, OperationsResponse["summary"]["daily"][number]>();
+  const reasonMap = new Map<string, { count: number; quantityByUnit: Record<string, number>; costMinor: number | null; hasUnknown: boolean }>();
+  const productMap = new Map<string, {
+    productId: string;
+    productName: string;
+    sku: string;
+    unit: string;
+    wastedQuantity: number;
+    wasteCostMinor: number | null;
+    unknownCostCount: number;
+    wasteEventsCount: number;
+  }>();
+
+  let hasWaste = false;
+  for (const movement of movements) {
+    const original = movement.kind === "reversal" ? all.find(m => m.id === movement.reversesId) : movement;
+    if (!original || original.kind !== "waste") continue;
+    hasWaste = true;
+    const sign = movement.kind === "reversal" ? -1 : 1;
+    const qty = Math.abs(movement.quantity) * sign;
+    const date = businessDate(movement.occurredAt, zone);
+    const day = days.get(date) ?? { date, wasteCostMinor: 0, waste: 0 };
+    const byUnit = summary.quantityByUnit[movement.unit] ??= { wasted: 0 };
+
+    summary.wasteUnits += qty;
+    day.waste += qty;
+    byUnit.wasted += qty;
+
+    if (original.unitCostMinor === undefined) {
+      summary.unknownCosts++;
+      summary.wasteCostMinor = null;
+      day.wasteCostMinor = null;
     } else {
-      summary.wasteUnits+=qty;day.waste+=qty;byUnit.wasted+=qty;
-      if(original.unitCostMinor===undefined){summary.unknownCosts++;summary.wasteCostMinor=null;day.wasteCostMinor=null;}
-      else{const amount=Math.round(Math.abs(movement.quantity)*original.unitCostMinor)*sign;if(summary.wasteCostMinor!==null)summary.wasteCostMinor+=amount;if(day.wasteCostMinor!==null)day.wasteCostMinor+=amount;}
+      const amount = Math.round(Math.abs(movement.quantity) * original.unitCostMinor) * sign;
+      if (summary.wasteCostMinor !== null) summary.wasteCostMinor += amount;
+      if (day.wasteCostMinor !== null) day.wasteCostMinor += amount;
     }
-    days.set(date,day);
+    days.set(date, day);
+
+    // Group by reason
+    const normReason = movement.reason.trim() || "Unspecified";
+    const reasonEntry = reasonMap.get(normReason) ?? { count: 0, quantityByUnit: {}, costMinor: 0, hasUnknown: false };
+    reasonEntry.count += sign;
+    reasonEntry.quantityByUnit[movement.unit] = (reasonEntry.quantityByUnit[movement.unit] ?? 0) + qty;
+    if (original.unitCostMinor === undefined) {
+      reasonEntry.hasUnknown = true;
+      reasonEntry.costMinor = null;
+    } else if (reasonEntry.costMinor !== null) {
+      const amount = Math.round(Math.abs(movement.quantity) * original.unitCostMinor) * sign;
+      reasonEntry.costMinor += amount;
+    }
+    reasonMap.set(normReason, reasonEntry);
+
+    // Group by product
+    const prodEntry = productMap.get(movement.productId) ?? {
+      productId: movement.productId,
+      productName: movement.productName,
+      sku: movement.sku,
+      unit: movement.unit,
+      wastedQuantity: 0,
+      wasteCostMinor: 0,
+      unknownCostCount: 0,
+      wasteEventsCount: 0,
+    };
+    prodEntry.wastedQuantity += qty;
+    prodEntry.wasteEventsCount += sign;
+    if (original.unitCostMinor === undefined) {
+      prodEntry.unknownCostCount++;
+      prodEntry.wasteCostMinor = null;
+    } else if (prodEntry.wasteCostMinor !== null) {
+      const amount = Math.round(Math.abs(movement.quantity) * original.unitCostMinor) * sign;
+      prodEntry.wasteCostMinor += amount;
+    }
+    productMap.set(movement.productId, prodEntry);
   }
-  if(!movements.length){summary.saleRevenueMinor=null;summary.wasteCostMinor=null;summary.limitations.push("No movement history is recorded for this period. Missing history is not zero activity.");}
-  if(summary.unknownPrices)summary.limitations.push("Sales revenue is unavailable because some recorded sales have no selling price.");
-  if(summary.unknownCosts)summary.limitations.push("Waste loss is unavailable because some waste records have no verified cost.");
-  if(Object.keys(summary.quantityByUnit).length>1)summary.limitations.push("Quantities use different units. Compare sold/wasted quantities by unit, not a combined total.");
-  if(state.products.some(p=>p.batches.some(b=>b.quantity>0&&!all.some(m=>m.productId===p.id&&m.batchId===b.id))))summary.limitations.push("Some existing stock predates the movement ledger; its historical movements and costs are unknown.");
-  summary.daily=[...days.values()].sort((a,b)=>a.date.localeCompare(b.date));
-  return {movements,suppliers:state.suppliers??[],summary};
+
+  if (!hasWaste) {
+    summary.wasteCostMinor = null;
+    summary.limitations.push("No waste movements are recorded for this period. Missing history is not zero activity.");
+  }
+  if (summary.unknownCosts > 0) {
+    summary.limitations.push("Total waste cost is unavailable because some waste records have no verified unit cost.");
+  }
+  if (Object.keys(summary.quantityByUnit).length > 1) {
+    summary.limitations.push("Quantities use different units. Compare wasted quantities by unit, not a combined total.");
+  }
+  if (state.products.some(p => p.batches.some(b => b.quantity > 0 && !all.some(m => m.productId === p.id && m.batchId === b.id)))) {
+    summary.limitations.push("Some existing stock predates the movement ledger; its historical movements and costs are unknown.");
+  }
+
+  summary.daily = [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
+  summary.wasteByReason = [...reasonMap.entries()].map(([reason, data]) => ({
+    reason,
+    count: Math.max(0, data.count),
+    quantityByUnit: data.quantityByUnit,
+    costMinor: data.costMinor,
+  })).sort((a, b) => b.count - a.count);
+  summary.productBreakdown = [...productMap.values()].sort((a, b) => b.wastedQuantity - a.wastedQuantity);
+
+  return { movements, suppliers: state.suppliers ?? [], summary };
 }

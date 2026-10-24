@@ -47,11 +47,13 @@ export function applyReceivingAction(state:AppState,raw:unknown,identity:Busines
   const invoice=state.invoiceIntakes.find(i=>i.id===intakeId);
   if(!invoice)throw new Error("Invoice not found in this business.");
   if(action.type==="cancel_invoice") {
-    if(invoice.status==="cancelled")throw new Error("This invoice is already cancelled.");
+    const hasReceipts = (invoice.receipts?.length ?? 0) > 0 || invoice.proposals.some(p => (p.receivedQuantity ?? 0) > 0);
+    if(hasReceipts) {
+      throw new Error("Cannot cancel an invoice with confirmed receiving records. Confirmed inventory receipts are permanent and cannot be deleted through cancellation.");
+    }
     const reason=requiredText(payload.reason,"Cancellation reason",500);
-    invoice.corrections??=[];invoice.corrections.push({at:new Date().toISOString(),actorId:identity.userId,reason,before:{status:invoice.status}});
-    invoice.status="cancelled";invoice.processingStatus="cancelled";
-    addOperationalActivity(state,identity,"invoice_cancelled","Invoice cancelled",`Document retained. Posted receipts were not automatically reversed. Reason: ${reason}`,{invoiceId:intakeId});
+    state.invoiceIntakes = state.invoiceIntakes.filter(i => i.id !== intakeId);
+    addOperationalActivity(state,identity,"invoice_cancelled","Invoice intake cancelled",`Pending unconfirmed invoice ${invoice.fileName} was cancelled and removed. Stored document was deleted. Reason: ${reason}`,{invoiceId:intakeId});
     return;
   }
   if(invoice.status==="cancelled")throw new Error("Cancelled invoices cannot be edited or received.");

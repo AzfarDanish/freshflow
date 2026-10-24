@@ -277,7 +277,12 @@ export type InventoryAction =
   | { type: "set_threshold"; payload: { thresholdDays: number } }
   | {
       type: "approve";
-      payload: { recommendationId: string; assignedTo: string; role?: "owner" | "staff" };
+      payload: {
+        recommendationId: string;
+        assignedTo: string;
+        customInstruction?: string;
+        role?: "owner" | "staff";
+      };
     }
   | {
       type: "reject";

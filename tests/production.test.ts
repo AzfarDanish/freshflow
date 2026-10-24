@@ -22,33 +22,49 @@ function state():AppState {
   s.invoiceIntakes=[{id:"i",fileName:"invoice.csv",mimeType:"text/csv",fileSizeBytes:20,sha256:"test",uploadedAt:now,status:"review",processingStatus:"review",warnings:[],simulated:false,proposals:[{id:"l",productName:"Apples",sku:"APP",category:"Produce",quantity:8,unit:"kg",batchId:"DELIVERY",expiryDate:"2026-10-27",status:"pending",issues:[],matchedProductId:"p",unitPriceMinor:250}]}];
   return s;
 }
-function movement(overrides:Record<string,unknown>={}) {return {type:"record_movement",payload:{requestId:"request-sale",kind:"sale",productId:"p",batchId:"B",quantity:2,unitPriceMinor:500,unitCostMinor:250,reason:"Recorded till sale",occurredAt:now,...overrides}};}
+function movement(overrides:Record<string,unknown>={}) {return {type:"record_movement",payload:{requestId:"request-waste",kind:"waste",productId:"p",batchId:"B",quantity:2,unitCostMinor:250,reason:"Expired stock discarded",occurredAt:now,...overrides}};}
 function receipt(s:AppState,amount=3,requestId="receipt-request") {return {type:"receive_invoice",payload:{intakeId:"i",requestId,confirmed:true,lines:[{proposalId:"l",quantity:amount,batchId:"DELIVERY",expiryDate:"2026-10-27",matchMode:"existing",fields:{...s.invoiceIntakes[0].proposals[0]}}]}};}
 beforeEach(()=>{vi.setSystemTime(new Date(now));});
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();vi.unstubAllGlobals();});
 describe("real operational foundation",()=>{
   it("starts unknown businesses empty, never recreates a fixture",()=>expect(createBusinessSeedState("new-business").products).toEqual([]));
-  it("persists sale deltas, retries idempotently and rejects conflicting request reuse",()=>{
+  it("persists waste deltas, retries idempotently and rejects conflicting request reuse",()=>{
     const s=state(),a=movement();applyOperationalAction(s,a,owner);applyOperationalAction(s,a,owner);
     expect(s.products[0].batches[0].quantity).toBe(8);expect(s.movements).toHaveLength(1);
     expect(()=>applyOperationalAction(s,movement({quantity:3}),owner)).toThrow("conflicts");
     expect(s.activity).toHaveLength(1);expect(s.activity[0]).toMatchObject({actor:"owner",actorId:"verified-owner",simulated:false});
   });
-  it("rejects overselling, zero quantities and Staff management",()=>{
+  it("rejects manual sales, over-wasting, zero quantities and Staff management",()=>{
+    expect(()=>applyOperationalAction(state(),movement({kind:"sale"}),owner)).toThrow("Manual sale recording is disabled");
     for(const bad of [movement({quantity:11}),movement({quantity:0})])expect(()=>applyOperationalAction(state(),bad,owner)).toThrow();
     expect(()=>applyOperationalAction(state(),movement(),staff)).toThrow();
+  });
+  it("records stock corrections with previous quantity, corrected quantity, difference and mandatory reason",()=>{
+    const s=state();
+    const corr={type:"record_movement",payload:{requestId:"corr-1",kind:"adjustment",productId:"p",batchId:"B",correctedQuantity:7,reason:"Physical stock-take audit",occurredAt:now}};
+    applyOperationalAction(s,corr,owner);
+    expect(s.products[0].batches[0].quantity).toBe(7);
+    expect(s.movements).toHaveLength(1);
+    expect(s.movements![0]).toMatchObject({
+      kind:"adjustment",
+      quantity:-3,
+      previousQuantity:10,
+      correctedQuantity:7,
+      reason:"Physical stock-take audit",
+    });
+    expect(s.activity[0].title).toBe("Stock discrepancy correction recorded");
   });
   it("reverses once with immutable original history and deterministic amounts",()=>{
     const s=state();applyOperationalAction(s,movement(),owner);
     const original=structuredClone(s.movements![0]);
-    const reverse={type:"reverse_movement",payload:{requestId:"reverse-request",movementId:original.id,reason:"Till entry corrected"}};
+    const reverse={type:"reverse_movement",payload:{requestId:"reverse-request",movementId:original.id,reason:"Waste entry corrected"}};
     applyOperationalAction(s,reverse,owner);applyOperationalAction(s,reverse,owner);
     expect(s.movements![0]).toEqual(original);expect(s.movements).toHaveLength(2);expect(s.products[0].batches[0].quantity).toBe(10);
-    expect(operationalReport(s,"2026-10-24","2026-10-24").summary.saleRevenueMinor).toBe(0);
+    expect(operationalReport(s,"2026-10-24","2026-10-24").summary.wasteCostMinor).toBe(0);
     expect(()=>applyOperationalAction(s,{...reverse,payload:{...reverse.payload,requestId:"another-reversal"}},owner)).toThrow("already");
   });
   it("does not turn absent prices, costs or history into fake zero metrics",()=>{
-    const s=state();expect(operationalReport(s,"2026-10-24","2026-10-24").summary.saleRevenueMinor).toBeNull();
+    const s=state();expect(operationalReport(s,"2026-10-24","2026-10-24").summary.wasteCostMinor).toBeNull();
     applyOperationalAction(s,movement({kind:"waste",unitCostMinor:undefined}),owner);
     const summary=operationalReport(s,"2026-10-24","2026-10-24").summary;
     expect(summary.wasteCostMinor).toBeNull();expect(summary.unknownCosts).toBe(1);

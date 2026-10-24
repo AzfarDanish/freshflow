@@ -15,7 +15,7 @@ const icons: Record<string, LucideIcon> = {
   invoices: FileText, inventory: Package, insights:BarChart3, settings: Settings2,
 };
 
-export function Sidebar({ counts, storageLabel, locked, role }: { counts: Partial<Record<string, number>>; storageLabel: string; locked: boolean; role: Role }) {
+export function Sidebar({ counts, locked, role }: { counts: Partial<Record<string, number>>; locked: boolean; role: Role }) {
   const active = operationForPath(usePathname())?.id;
   return (
     <aside className="sidebar">
@@ -39,10 +39,6 @@ export function Sidebar({ counts, storageLabel, locked, role }: { counts: Partia
           ); })}
         </ul>
       </nav>
-      <div className="side-footer">
-        <Database aria-hidden="true" />
-        <span>{storageLabel}</span>
-      </div>
     </aside>
   );
 }

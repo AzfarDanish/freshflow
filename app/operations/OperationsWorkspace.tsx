@@ -24,8 +24,6 @@ import {
   sortTasks, taskInventorySummary, workspaceHasOnlySyntheticRecords,
 } from "@/src/lib/operations-view";
 import type { InventoryFilter } from "@/src/lib/operations-view";
-import { InvoiceIntakePanel } from "@/app/invoice-intake/InvoiceIntakePanel";
-import type { InvoiceIntakePanelProps, InvoiceProposalDraft } from "@/app/invoice-intake/InvoiceIntakePanel";
 import { Sidebar } from "@/app/operations/Sidebar";
 import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/ui";
 import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
@@ -33,7 +31,19 @@ import type { Role } from "@/app/operations/workflow";
 import { InsightsPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
 import { InvoiceReceivingPanel } from "@/app/production/InvoiceReceivingPanel";
 
-type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "progress" | "complete" | "reset" | null;
+function decimalToMinor(raw: string): number | undefined {
+  const text = raw.trim();
+  if (!text) return undefined;
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(text)) throw new Error("Enter a valid amount with no more than two decimal places.");
+  const negative = text.startsWith("-");
+  const unsigned = negative ? text.slice(1) : text;
+  const [whole, fraction = ""] = unsigned.split(".");
+  const minor = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(minor)) throw new Error("Amount is too large.");
+  return negative ? -minor : minor;
+}
+
+type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "progress" | "complete" | "reset" | "waste" | "correction" | null;
 type InventorySelection = { product: Product; batch: InventoryBatch };
 
 const emptyState: AppState = {
@@ -50,6 +60,8 @@ const DIALOG_TITLES: Record<Exclude<ModalKind, null>, string> = {
   progress: "Update task progress",
   complete: "Report task outcome",
   reset: "Reset whole demo",
+  waste: "Record stock waste",
+  correction: "Record stock discrepancy correction",
 };
 
 export default function OperationsWorkspace({ children }: { children: ReactNode }) {
@@ -76,6 +88,11 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const [thresholdDraft, setThresholdDraft] = useState(3);
   const [formError, setFormError] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [customActionDirective, setCustomActionDirective] = useState("");
+  const [useCustomDirective, setUseCustomDirective] = useState(false);
+  const [decisionQuery, setDecisionQuery] = useState("");
+  const [taskQuery, setTaskQuery] = useState("");
+  const [taskFilter, setTaskFilter] = useState<"all" | "open" | "completed">("all");
   const [rejectReason, setRejectReason] = useState("");
   const [outcomeType, setOutcomeType] = useState<TaskOutcomeType>("rotated");
   const [outcomeExplanation, setOutcomeExplanation] = useState("");
@@ -85,7 +102,22 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>("all");
   const [resetAcknowledged, setResetAcknowledged] = useState(false);
-  const [invoiceDrafts, setInvoiceDrafts] = useState<Record<string, InvoiceProposalDraft>>({});
+
+  // Modal state for Waste and Correction
+  const [modalProductId, setModalProductId] = useState("");
+  const [modalBatchId, setModalBatchId] = useState("");
+  const [modalWasteQuantity, setModalWasteQuantity] = useState("");
+  const [modalWasteCost, setModalWasteCost] = useState("");
+  const [modalWasteReasonPreset, setModalWasteReasonPreset] = useState("Expired / past shelf life");
+  const [modalWasteReasonCustom, setModalWasteReasonCustom] = useState("");
+  const [modalWasteOccurredAt, setModalWasteOccurredAt] = useState("");
+
+  const [modalCorrCount, setModalCorrCount] = useState("");
+  const [modalCorrCost, setModalCorrCost] = useState("");
+  const [modalCorrReasonPreset, setModalCorrReasonPreset] = useState("Physical stock-take discrepancy");
+  const [modalCorrReasonCustom, setModalCorrReasonCustom] = useState("");
+  const [modalCorrOccurredAt, setModalCorrOccurredAt] = useState("");
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement>(null);
@@ -135,6 +167,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
   const changePreviewRole = useCallback(async (nextRole: Role) => {
     if (busyRef.current || nextRole === responseRef.current?.role) return;
+    setRole(nextRole);
     busyRef.current = true;
     ++loadRequestId.current;
     setBusy(true);
@@ -156,6 +189,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
       if (activeOperation && !canAccessOperation(nextRole, activeOperation.id)) router.replace("/");
       syncChannelRef.current?.postMessage("changed");
     } catch (error) {
+      if (responseRef.current?.role) setRole(responseRef.current.role);
       const message = error instanceof Error ? error.message : "Could not change the preview role.";
       setActionError(message);
       setToastError(true);
@@ -164,7 +198,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
       busyRef.current = false;
       setBusy(false);
     }
-  }, [applyStoredState, businessId, pathname, router]);
+  }, [applyStoredState, pathname, router]);
 
   useEffect(() => {
     const activeOperation = operationForPath(pathname);
@@ -252,7 +286,6 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
       applyStoredState(body as StateResponse, action.type !== "set_threshold" && action.type !== "reset");
       setLoadError("");
       if (action.type === "reset") {
-        setInvoiceDrafts({});
         setInventoryQuery("");
         setInventoryFilter("all");
         setSelectedRecommendation(null);
@@ -278,68 +311,42 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     }
   }, [businessId, closeModal, applyStoredState]);
 
-  const runInvoiceRequest = useCallback(async (request: () => Promise<Response>) => {
-    if (busyRef.current) throw new Error("An operation is already being saved. Wait for it to finish.");
-    busyRef.current = true;
-    ++loadRequestId.current;
-    setLoading(false);
-    setBusy(true);
-    setActionError("");
-    try {
-      const res = await request();
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || "Invoice action could not be saved.");
-      applyStoredState(body as StateResponse);
-      setLoadError("");
-      syncChannelRef.current?.postMessage("changed");
-      setToastError(false);
-      return body as StateResponse;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Invoice action could not be saved.";
-      setActionError(message);
-      setToastError(true);
-      throw new Error(message);
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }, [applyStoredState]);
-
-  const uploadInvoice = useCallback(async (file: File) => {
-    const form = new FormData();
-    form.set("businessId", businessId);
-    form.set("file", file);
-    await runInvoiceRequest(() => fetch("/api/invoices", { method: "POST", body: form, headers: { Accept: "application/json" } }));
-  }, [businessId, runInvoiceRequest]);
-
-  const postInvoiceAction = useCallback((action: InventoryAction) => runInvoiceRequest(() => fetch("/api/action", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ businessId, action }),
-  })), [businessId, runInvoiceRequest]);
-
-  const saveInvoiceProposal = useCallback(async (intakeId: string, proposalId: string, fields: Parameters<InvoiceIntakePanelProps["onSaveProposal"]>[2]) => {
-    const { matchedProductId, ...proposalFields } = fields;
-    await postInvoiceAction({ type: "edit_invoice_proposal", payload: { intakeId, proposalId, fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined }, role } });
-  }, [postInvoiceAction, role]);
-
-  const confirmInvoiceProposal = useCallback(async (intakeId: string, proposalId: string, fields: Parameters<InvoiceIntakePanelProps["onConfirmProposal"]>[2]) => {
-    const { matchMode, matchedProductId, ...proposalFields } = fields;
-    await postInvoiceAction({ type: "confirm_invoice_proposal", payload: { intakeId, proposalId, fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined }, matchMode, role } });
-  }, [postInvoiceAction, role]);
-
-  const discardInvoiceProposal = useCallback(async (intakeId: string, proposalId: string) => {
-    await postInvoiceAction({ type: "discard_invoice_proposal", payload: { intakeId, proposalId, role } });
-  }, [postInvoiceAction, role]);
-
   const groups = useMemo(() => expiryGroups(state.products, referenceDate, thresholdDays), [state.products, referenceDate, thresholdDays]);
   const allRows = useMemo(() => inventoryRows(state.products), [state.products]);
   const filteredInventory = useMemo(
     () => filterInventory(allRows, inventoryQuery, inventoryFilter, referenceDate, thresholdDays),
     [allRows, inventoryQuery, inventoryFilter, referenceDate, thresholdDays],
   );
-  const recommendations = useMemo(() => sortRecommendations(state.recommendations), [state.recommendations]);
-  const tasks = useMemo(() => sortTasks(state.tasks), [state.tasks]);
+  const allRecommendations = useMemo(() => sortRecommendations(state.recommendations), [state.recommendations]);
+  const recommendations = useMemo(() => {
+    if (!decisionQuery.trim()) return allRecommendations;
+    const q = decisionQuery.toLowerCase().trim();
+    return allRecommendations.filter((r) =>
+      r.productName.toLowerCase().includes(q) ||
+      r.sku.toLowerCase().includes(q) ||
+      r.batchId.toLowerCase().includes(q) ||
+      r.explanation.toLowerCase().includes(q) ||
+      r.suggestedAction.toLowerCase().includes(q)
+    );
+  }, [allRecommendations, decisionQuery]);
+
+  const allTasks = useMemo(() => sortTasks(state.tasks), [state.tasks]);
+  const tasks = useMemo(() => {
+    return allTasks.filter((t) => {
+      if (taskFilter === "open" && t.status !== "open") return false;
+      if (taskFilter === "completed" && t.status !== "completed") return false;
+      if (!taskQuery.trim()) return true;
+      const q = taskQuery.toLowerCase().trim();
+      return (
+        t.title.toLowerCase().includes(q) ||
+        (t.assignedTo && t.assignedTo.toLowerCase().includes(q)) ||
+        (t.productName && t.productName.toLowerCase().includes(q)) ||
+        (t.sku && t.sku.toLowerCase().includes(q)) ||
+        (t.instruction && t.instruction.toLowerCase().includes(q))
+      );
+    });
+  }, [allTasks, taskFilter, taskQuery]);
+
   const activity = useMemo(() => [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)), [state.activity]);
   const pendingCount = response?.pendingRecommendationCount ?? state.recommendations.filter((recommendation) => recommendation.status === "pending").length;
   const recommendationCount = response?.recommendationCount ?? state.recommendations.length;
@@ -357,6 +364,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setActionError("");
     setFormError("");
+    if (kind === "approve") {
+      setCustomActionDirective(recommendation?.suggestedAction ?? "");
+      setUseCustomDirective(false);
+    }
     if (kind === "reject") setRejectReason("");
     if (kind === "reset") setResetAcknowledged(false);
     if (kind === "complete") {
@@ -366,6 +377,30 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
     if (kind === "progress" && task) {
       setProgressType(task.progressType ?? "not_started");
       setProgressNote(task.progressNote ?? "");
+    }
+    if (kind === "waste") {
+      const pId = inventory?.product.id ?? (state.products[0]?.id ?? "");
+      const prod = state.products.find((p) => p.id === pId);
+      const bId = inventory?.batch.id ?? (prod?.batches[0]?.id ?? "");
+      setModalProductId(pId);
+      setModalBatchId(bId);
+      setModalWasteQuantity("");
+      setModalWasteCost("");
+      setModalWasteReasonPreset("Expired / past shelf life");
+      setModalWasteReasonCustom("");
+      setModalWasteOccurredAt(new Date().toISOString().slice(0, 16));
+    }
+    if (kind === "correction") {
+      const pId = inventory?.product.id ?? (state.products[0]?.id ?? "");
+      const prod = state.products.find((p) => p.id === pId);
+      const bId = inventory?.batch.id ?? (prod?.batches[0]?.id ?? "");
+      setModalProductId(pId);
+      setModalBatchId(bId);
+      setModalCorrCount("");
+      setModalCorrCost("");
+      setModalCorrReasonPreset("Physical stock-take discrepancy");
+      setModalCorrReasonCustom("");
+      setModalCorrOccurredAt(new Date().toISOString().slice(0, 16));
     }
     setSelectedRecommendation(recommendation ?? null);
     setSelectedTask(task ?? null);
@@ -399,7 +434,20 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
   function approveRecommendation() {
     if (!selectedRecommendation) return;
-    void sendAction({ type: "approve", payload: { recommendationId: selectedRecommendation.id, assignedTo: assignee.trim() || "Unassigned", role } }, "Recommendation approved; a staff task was created.");
+    const directive = useCustomDirective ? customActionDirective.trim() : undefined;
+    if (useCustomDirective && !directive) {
+      setFormError("Please enter your custom action directive, or uncheck custom directive.");
+      return;
+    }
+    void sendAction({
+      type: "approve",
+      payload: {
+        recommendationId: selectedRecommendation.id,
+        assignedTo: assignee.trim() || "Unassigned",
+        customInstruction: directive,
+        role,
+      },
+    }, "Recommendation approved; a staff task was created.");
   }
   function deleteInventoryRecord() {
     if (!selectedInventory) return;
@@ -440,6 +488,158 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   }
   function changeThreshold() {
     void sendAction({ type: "set_threshold", payload: { thresholdDays: thresholdDraft } }, "Expiry threshold updated.");
+  }
+
+  async function submitWasteModal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError("");
+    const selectedProduct = state.products.find((p) => p.id === modalProductId);
+    const selectedBatch = selectedProduct?.batches.find((b) => b.id === modalBatchId);
+    const amount = Number(modalWasteQuantity);
+    if (!selectedProduct || !selectedBatch) {
+      setFormError("Choose a valid product and recorded batch.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setFormError("Enter a positive waste quantity.");
+      return;
+    }
+    if (amount > selectedBatch.quantity) {
+      setFormError(`Waste quantity cannot exceed current batch stock (${selectedBatch.quantity} ${selectedProduct.unit}).`);
+      return;
+    }
+    let costMinor: number | undefined;
+    try {
+      costMinor = decimalToMinor(modalWasteCost);
+      if (costMinor !== undefined && costMinor < 0) {
+        setFormError("Unit cost cannot be negative.");
+        return;
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Invalid unit cost.");
+      return;
+    }
+    const finalReason = modalWasteReasonPreset === "Other"
+      ? modalWasteReasonCustom.trim()
+      : (modalWasteReasonCustom.trim() ? `${modalWasteReasonPreset}: ${modalWasteReasonCustom.trim()}` : modalWasteReasonPreset);
+    if (!finalReason) {
+      setFormError("Specify a reason for recording this waste.");
+      return;
+    }
+    const parsedTime = new Date(modalWasteOccurredAt);
+    if (Number.isNaN(parsedTime.getTime())) {
+      setFormError("Choose a valid occurrence time.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/operations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "record_movement",
+          payload: {
+            requestId: crypto.randomUUID(),
+            kind: "waste",
+            productId: modalProductId,
+            batchId: modalBatchId,
+            quantity: amount,
+            ...(costMinor === undefined ? {} : { unitCostMinor: costMinor }),
+            reason: finalReason,
+            occurredAt: parsedTime.toISOString(),
+          },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || body?.message || "Failed to record waste.");
+
+      await loadState(businessId);
+      syncChannelRef.current?.postMessage("changed");
+      closeModal();
+      setToast(`Waste recorded: ${amount} ${selectedProduct.unit} written down from ${selectedProduct.name}.`);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to record waste.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitCorrectionModal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError("");
+    const selectedProduct = state.products.find((p) => p.id === modalProductId);
+    const selectedBatch = selectedProduct?.batches.find((b) => b.id === modalBatchId);
+    const count = Number(modalCorrCount);
+    if (!selectedProduct || !selectedBatch) {
+      setFormError("Choose a valid product and recorded batch.");
+      return;
+    }
+    if (!Number.isFinite(count) || count < 0) {
+      setFormError("Enter a valid non-negative actual physical count.");
+      return;
+    }
+    const prev = selectedBatch.quantity;
+    if (Math.abs(count - prev) < 0.0001) {
+      setFormError("Actual count matches the recorded stock. No discrepancy to correct.");
+      return;
+    }
+    let costMinor: number | undefined;
+    try {
+      costMinor = decimalToMinor(modalCorrCost);
+      if (costMinor !== undefined && costMinor < 0) {
+        setFormError("Unit cost cannot be negative.");
+        return;
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Invalid unit cost.");
+      return;
+    }
+    const finalReason = modalCorrReasonPreset === "Other"
+      ? modalCorrReasonCustom.trim()
+      : (modalCorrReasonCustom.trim() ? `${modalCorrReasonPreset}: ${modalCorrReasonCustom.trim()}` : modalCorrReasonPreset);
+    if (!finalReason) {
+      setFormError("A reason explanation is mandatory for inventory discrepancy corrections.");
+      return;
+    }
+    const parsedTime = new Date(modalCorrOccurredAt);
+    if (Number.isNaN(parsedTime.getTime())) {
+      setFormError("Choose a valid occurrence time.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/operations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "record_movement",
+          payload: {
+            requestId: crypto.randomUUID(),
+            kind: "adjustment",
+            productId: modalProductId,
+            batchId: modalBatchId,
+            correctedQuantity: count,
+            ...(costMinor === undefined ? {} : { unitCostMinor: costMinor }),
+            reason: finalReason,
+            occurredAt: parsedTime.toISOString(),
+          },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || body?.message || "Failed to record stock correction.");
+
+      const diff = Math.round((count - prev) * 10000) / 10000;
+      await loadState(businessId);
+      syncChannelRef.current?.postMessage("changed");
+      closeModal();
+      setToast(`Stock corrected: ${selectedProduct.name} batch ${modalBatchId} adjusted from ${prev} to ${count} ${selectedProduct.unit} (${diff > 0 ? "+" : ""}${diff} ${selectedProduct.unit}).`);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to record stock correction.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const controlsLocked = busy || modal !== null;
@@ -490,6 +690,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
         {page === "insights" && <InsightsPanel
           products={state.products}
+          timeZone={state.settings.timeZone}
           onChanged={() => void loadState(businessId)}
           onExplain={({ from, to }) => {
             setInsightsAssistantRequest({ id: crypto.randomUUID(), from, to });
@@ -497,18 +698,72 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           }}
         />}
         {page === "decisions" &&
-          <Section id="decisions" icon={Sparkles} title="Decisions" description={role === "owner" ? "Review each rule-based recommendation, then approve or reject" : "Owner decisions on rule-based recommendations"} meta={loading ? undefined : `${pendingCount} pending`} className="scroll-panel">
+          <Section
+            id="decisions"
+            icon={Sparkles}
+            title="Decisions"
+            description={role === "owner" ? "Review each rule-based recommendation, then approve or reject" : "Manager decisions on rule-based recommendations"}
+            meta={loading ? undefined : `${recommendations.length} of ${allRecommendations.length}`}
+            actions={
+              <div className="toolbar">
+                <label className="search-field">
+                  <Search aria-hidden="true" />
+                  <span className="sr-only">Search decisions</span>
+                  <input
+                    type="search"
+                    value={decisionQuery}
+                    onChange={(e) => setDecisionQuery(e.target.value)}
+                    placeholder="Search product, SKU or action"
+                  />
+                </label>
+              </div>
+            }
+            className="scroll-panel"
+          >
             {loading ? <LoadingRows label="Loading recommendations" /> :
               recommendations.length ? <div className="list">{recommendations.map((recommendation) => <RecommendationCard key={recommendation.id} recommendation={recommendation} role={role} busy={busy} onApprove={() => openModal("approve", recommendation)} onReject={() => openModal("reject", recommendation)} />)}</div> :
-              <EmptyState title="No recommendations">A batch inside the expiry threshold creates one.</EmptyState>}
+              <EmptyState title={decisionQuery ? "No matching decisions" : "No recommendations"}>
+                {decisionQuery ? "Try clearing your search query." : "A batch inside the expiry threshold creates one."}
+              </EmptyState>}
           </Section>
         }
 
         {page === "tasks" &&
-          <Section id="tasks" icon={ClipboardList} title="Staff tasks" description="Created when an owner approves a recommendation; staff report the outcome" meta={loading ? undefined : `${openTaskCount} open`} className="scroll-panel">
+          <Section
+            id="tasks"
+            icon={ClipboardList}
+            title="Staff tasks"
+            description="Created when a manager approves a recommendation; staff report the outcome"
+            meta={loading ? undefined : `${tasks.length} of ${allTasks.length}`}
+            actions={
+              <div className="toolbar">
+                <label className="search-field">
+                  <Search aria-hidden="true" />
+                  <span className="sr-only">Search tasks</span>
+                  <input
+                    type="search"
+                    value={taskQuery}
+                    onChange={(e) => setTaskQuery(e.target.value)}
+                    placeholder="Search task, assignee or SKU"
+                  />
+                </label>
+                <label className="select-field">
+                  <span className="sr-only">Filter tasks by status</span>
+                  <select value={taskFilter} onChange={(e) => setTaskFilter(e.target.value as "all" | "open" | "completed")}>
+                    <option value="all">All status</option>
+                    <option value="open">Open</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </label>
+              </div>
+            }
+            className="scroll-panel"
+          >
             {loading ? <LoadingRows label="Loading staff tasks" /> :
               tasks.length ? <div className="list">{tasks.map((task) => <TaskRow key={task.id} task={task} recommendation={state.recommendations.find((item) => item.id === task.recommendationId)} busy={busy} onProgress={() => openModal("progress", undefined, task)} onComplete={() => openModal("complete", undefined, task)} />)}</div> :
-              <EmptyState title="No staff tasks">Approve a pending recommendation to create one.</EmptyState>}
+              <EmptyState title={taskQuery || taskFilter !== "all" ? "No matching tasks" : "No staff tasks"}>
+                {taskQuery || taskFilter !== "all" ? "Try adjusting your search or status filter." : "Approve a pending recommendation to create one."}
+              </EmptyState>}
           </Section>
         }
 
@@ -546,7 +801,13 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
                 <option value="safe">No current risk</option>
               </select>
             </label>
-            {role === "owner" && <button type="button" className="btn btn-primary btn-sm" onClick={() => openModal("add")} disabled={busy || loading}><Plus aria-hidden="true" />Add stock</button>}
+            {role === "owner" && (
+              <>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => openModal("add")} disabled={busy || loading}><Plus aria-hidden="true" />Add stock</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => openModal("waste")} disabled={busy || loading}><Trash2 aria-hidden="true" />Record waste</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => openModal("correction")} disabled={busy || loading}><SlidersHorizontal aria-hidden="true" />Correct stock</button>
+              </>
+            )}
           </div>}
         >
           {loading ? <LoadingRows label="Loading inventory" rows={4} /> :
@@ -564,6 +825,8 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
                       <td data-label="Expiry">{dateLabel(batch.expiryDate)}</td>
                       <td data-label="Status"><StatusBadge tone={risk.tone}>{risk.label}</StatusBadge></td>
                       <td className="row-actions">{role === "owner" && <div className="toolbar">
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("waste", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Record waste for ${product.name} batch ${batch.id}`}>Waste</button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("correction", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Correct stock for ${product.name} batch ${batch.id}`}>Correct</button>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Edit ${product.name} batch ${batch.id}`}><Pencil aria-hidden="true" />Edit</button>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => openModal("delete", undefined, undefined, { product, batch })} disabled={busy} aria-label={`Delete ${product.name} batch ${batch.id}`}><Trash2 aria-hidden="true" />Delete</button>
                       </div>}</td>
@@ -593,9 +856,9 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
               <h3 className="block-title"><Info aria-hidden="true" />About this workspace</h3>
               <ul className="facts">
                 <li><strong>Operational data.</strong> Inventory, receipts, movements, and audit history use persisted records. Unknown history and costs are not invented.</li>
-                <li><strong>Public testing profiles.</strong> Anyone with this link can select Owner or Staff and access this persistent database. Do not store private or sensitive production information here.</li>
+                <li><strong>Public testing profiles.</strong> Anyone with this link can select Manager or Staff and access this persistent database. Do not store private or sensitive production information here.</li>
                 <li><strong>Reference date.</strong> Expiry uses today&apos;s calendar date in {state.settings.timeZone ?? "Asia/Kuala_Lumpur"}.</li>
-                <li><strong>Storage.</strong> {storageLabel}. There is no live POS or stock-system sync; completing a task never changes quantities.</li>
+                <li><strong>Operations.</strong> Live stock-movement tracking with zero invented forecasting. Completing a task records employee outcome report.</li>
               </ul>
             </div>
           </div>
@@ -610,7 +873,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
 
   return <div className="shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
-    <Sidebar storageLabel={storageLabel} counts={{ decisions: pendingCount, tasks: openTaskCount, invoices: invoiceReviewCount }} locked={controlsLocked} role={role} />
+    <Sidebar counts={{ decisions: pendingCount, tasks: openTaskCount, invoices: invoiceReviewCount }} locked={controlsLocked} role={role} />
     <main className="main" id="main-content" tabIndex={-1}>
       <header className="topbar">
         <div className="topbar-context">
@@ -619,11 +882,11 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>
         <div className="top-actions">
           <div className="control" role="group" aria-labelledby="role-view-label">
-            <span className="control-label" id="role-view-label" title="Public testing profiles: anyone with the link can select Owner or Staff. Not security or production access control.">PUBLIC TESTING · NOT SECURITY</span>
+            <span className="control-label" id="role-view-label" title="Testing profiles: select Manager or Staff view.">PROFILE VIEW</span>
             <div className="segmented">
               {(["owner", "staff"] as const).map((value) => (
                 <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked}>
-                  {value === "owner" ? "Owner" : "Staff"}
+                  {value === "owner" ? "Manager" : "Staff"}
                 </button>
               ))}
             </div>
@@ -661,7 +924,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         <div className="dialog-head">
           <div>
             <h2 id="dialog-title">{DIALOG_TITLES[modal]}</h2>
-            <p className="dialog-intro" id="dialog-intro">{modal === "add" ? `Add a product batch to ${businessName}.` : modal === "edit" ? "Update this product and batch. Related expiry risks are recalculated." : modal === "delete" ? "Remove this batch from inventory. Historical decisions and completed reports remain." : modal === "approve" ? "Approval creates one staff task linked to this recommendation." : modal === "reject" ? "Record the owner decision. No task is created." : modal === "progress" ? "Update this task's progress without changing stock quantities." : modal === "complete" ? "Record the reported task outcome. Completing a task does not adjust stock quantity." : `This affects ${businessName} only.`}</p>
+            <p className="dialog-intro" id="dialog-intro">{modal === "add" ? `Add a product batch to ${businessName}.` : modal === "edit" ? "Update this product and batch. Related expiry risks are recalculated." : modal === "delete" ? "Remove this batch from inventory. Historical decisions and completed reports remain." : modal === "approve" ? "Approval creates one staff task linked to this recommendation." : modal === "reject" ? "Record the owner decision. No task is created." : modal === "progress" ? "Update this task's progress without changing stock quantities." : modal === "complete" ? "Record the reported task outcome. Completing a task does not adjust stock quantity." : modal === "waste" ? "Record expired, spoiled, damaged or discarded stock. Reduces batch inventory persistently." : modal === "correction" ? "Record verified physical inventory discrepancies. Preserves previous quantity and mandatory reason in history." : `This affects ${businessName} only.`}</p>
           </div>
           <button type="button" className="icon-btn" aria-label="Close dialog" onClick={closeModal} disabled={busy}><X aria-hidden="true" /></button>
         </div>
@@ -689,7 +952,33 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>}
 
         {modal === "approve" && <div>
-          {selectedRecommendation && <div className="summary-box"><div className="summary-title">{selectedRecommendation.productName}</div><div className="summary-meta mono">{selectedRecommendation.quantity} {selectedRecommendation.unit} · Batch {selectedRecommendation.batchId} · Expires {dateLabel(selectedRecommendation.expiryDate)}</div><p>{selectedRecommendation.suggestedAction}</p></div>}
+          {selectedRecommendation && <div className="summary-box"><div className="summary-title">{selectedRecommendation.productName}</div><div className="summary-meta mono">{selectedRecommendation.quantity} {selectedRecommendation.unit} · Batch {selectedRecommendation.batchId} · Expires {dateLabel(selectedRecommendation.expiryDate)}</div><p><strong>Suggested rule action:</strong> {selectedRecommendation.suggestedAction}</p></div>}
+          
+          <div className="field" style={{ marginTop: "12px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontWeight: 600 }}>
+              <input
+                type="checkbox"
+                checked={useCustomDirective}
+                onChange={(e) => setUseCustomDirective(e.target.checked)}
+              />
+              Specify a custom manager directive for staff
+            </label>
+            {useCustomDirective && (
+              <textarea
+                style={{ marginTop: "8px", minHeight: "70px" }}
+                value={customActionDirective}
+                onChange={(e) => setCustomActionDirective(e.target.value)}
+                placeholder="e.g. Move to front discount rack at 30% off, inspect seal integrity"
+                maxLength={500}
+              />
+            )}
+            <span className="field-hint">
+              {useCustomDirective
+                ? "This custom directive will be assigned to staff as the task instruction."
+                : "Staff task will use the rule's suggested action by default."}
+            </span>
+          </div>
+
           <div className="field"><label htmlFor="assignee">Assign task to</label><select id="assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Aina</option><option>Ravi</option><option>Mei Ling</option><option>Unassigned</option></select><span className="field-hint">Staff names are sample team members.</span></div>
           {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
           <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button><button type="button" className="btn btn-primary" onClick={approveRecommendation} disabled={busy}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Check aria-hidden="true" />}Approve &amp; create task</button></div>
@@ -726,6 +1015,312 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
           <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy} data-autofocus>Keep current data</button><button type="button" className="btn btn-danger" onClick={() => void sendAction({ type: "reset", payload: { confirmed: true } }, "The whole demo was restored to its initial dataset.")} disabled={busy || !resetAcknowledged}>{busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <RotateCcw aria-hidden="true" />}Reset whole demo</button></div>
         </div>}
+
+        {modal === "waste" && (() => {
+          const prod = state.products.find((p) => p.id === modalProductId);
+          const batches = prod?.batches ?? [];
+          const bat = batches.find((b) => b.id === modalBatchId);
+
+          return (
+            <form onSubmit={submitWasteModal} noValidate>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="modalWasteProduct">Product</label>
+                  <select
+                    id="modalWasteProduct"
+                    value={modalProductId}
+                    onChange={(e) => {
+                      const nextPid = e.target.value;
+                      setModalProductId(nextPid);
+                      const nextProd = state.products.find((p) => p.id === nextPid);
+                      setModalBatchId(nextProd?.batches[0]?.id ?? "");
+                    }}
+                    required
+                    disabled={busy || Boolean(selectedInventory)}
+                  >
+                    <option value="">Select product</option>
+                    {state.products.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} · {p.sku}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalWasteBatch">Batch</label>
+                  <select
+                    id="modalWasteBatch"
+                    value={modalBatchId}
+                    onChange={(e) => setModalBatchId(e.target.value)}
+                    required
+                    disabled={busy || !prod || Boolean(selectedInventory)}
+                  >
+                    <option value="">Select batch</option>
+                    {batches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.id} · {b.quantity} {prod?.unit} (exp: {b.expiryDate || "no date"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {bat && (
+                  <div className="field full">
+                    <div className="summary-box" style={{ margin: 0 }}>
+                      <div className="summary-title">{prod?.name} · Batch {bat.id}</div>
+                      <div className="summary-meta mono">
+                        Current stock: <strong>{bat.quantity} {prod?.unit}</strong> · Expires {dateLabel(bat.expiryDate)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="field">
+                  <label htmlFor="modalWasteQty">
+                    Quantity to discard {bat ? `(max ${bat.quantity} ${prod?.unit})` : ""}
+                  </label>
+                  <input
+                    id="modalWasteQty"
+                    type="number"
+                    step="any"
+                    min="0.0001"
+                    max={bat?.quantity}
+                    value={modalWasteQuantity}
+                    onChange={(e) => setModalWasteQuantity(e.target.value)}
+                    placeholder="e.g. 5"
+                    required
+                    disabled={busy}
+                  />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalWasteCost">
+                    Verified unit cost <span className="optional">(optional)</span>
+                  </label>
+                  <input
+                    id="modalWasteCost"
+                    inputMode="decimal"
+                    placeholder="e.g. 2.50"
+                    value={modalWasteCost}
+                    onChange={(e) => setModalWasteCost(e.target.value)}
+                    disabled={busy}
+                  />
+                  <span className="field-hint">In MYR. Leave blank if unverified.</span>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalWastePreset">Waste category</label>
+                  <select
+                    id="modalWastePreset"
+                    value={modalWasteReasonPreset}
+                    onChange={(e) => setModalWasteReasonPreset(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="Expired / past shelf life">Expired / past shelf life</option>
+                    <option value="Damaged in transit / display">Damaged in transit / display</option>
+                    <option value="Spoilage / quality defect">Spoilage / quality defect</option>
+                    <option value="Customer return / unsellable">Customer return / unsellable</option>
+                    <option value="Pest contamination">Pest contamination</option>
+                    <option value="Other">Other reason (specify below)</option>
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalWasteCustom">
+                    Reason details {modalWasteReasonPreset === "Other" ? "(mandatory)" : <span className="optional">(optional)</span>}
+                  </label>
+                  <input
+                    id="modalWasteCustom"
+                    placeholder={modalWasteReasonPreset === "Other" ? "Explain waste reason..." : "Additional details..."}
+                    value={modalWasteReasonCustom}
+                    onChange={(e) => setModalWasteReasonCustom(e.target.value)}
+                    required={modalWasteReasonPreset === "Other"}
+                    disabled={busy}
+                  />
+                </div>
+
+                <div className="field full">
+                  <label htmlFor="modalWasteTime">Occurred at</label>
+                  <input
+                    id="modalWasteTime"
+                    type="datetime-local"
+                    value={modalWasteOccurredAt}
+                    onChange={(e) => setModalWasteOccurredAt(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+
+              {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+              <div className="dialog-actions">
+                <button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={busy}>
+                  {busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Trash2 aria-hidden="true" />}
+                  Record waste
+                </button>
+              </div>
+            </form>
+          );
+        })()}
+
+        {modal === "correction" && (() => {
+          const prod = state.products.find((p) => p.id === modalProductId);
+          const batches = prod?.batches ?? [];
+          const bat = batches.find((b) => b.id === modalBatchId);
+          const countNum = Number(modalCorrCount);
+          const diff = bat && modalCorrCount.trim() !== "" && Number.isFinite(countNum)
+            ? Math.round((countNum - bat.quantity) * 10000) / 10000
+            : null;
+
+          return (
+            <form onSubmit={submitCorrectionModal} noValidate>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="modalCorrProduct">Product</label>
+                  <select
+                    id="modalCorrProduct"
+                    value={modalProductId}
+                    onChange={(e) => {
+                      const nextPid = e.target.value;
+                      setModalProductId(nextPid);
+                      const nextProd = state.products.find((p) => p.id === nextPid);
+                      setModalBatchId(nextProd?.batches[0]?.id ?? "");
+                    }}
+                    required
+                    disabled={busy || Boolean(selectedInventory)}
+                  >
+                    <option value="">Select product</option>
+                    {state.products.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} · {p.sku}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalCorrBatch">Batch</label>
+                  <select
+                    id="modalCorrBatch"
+                    value={modalBatchId}
+                    onChange={(e) => setModalBatchId(e.target.value)}
+                    required
+                    disabled={busy || !prod || Boolean(selectedInventory)}
+                  >
+                    <option value="">Select batch</option>
+                    {batches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.id} · {b.quantity} {prod?.unit}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {bat && (
+                  <div className="field full">
+                    <div className="summary-box" style={{ margin: 0 }}>
+                      <div className="summary-title">{prod?.name} · Batch {bat.id}</div>
+                      <div className="summary-meta mono">
+                        Recorded stock: <strong>{bat.quantity} {prod?.unit}</strong> · Expires {dateLabel(bat.expiryDate)}
+                      </div>
+                      {diff !== null && (
+                        <div style={{ marginTop: "6px", fontSize: "12px", fontWeight: 600, color: diff < 0 ? "#a04000" : diff > 0 ? "#196f3d" : "#4a515c" }}>
+                          {diff === 0
+                            ? "No discrepancy (count matches recorded stock)"
+                            : diff < 0
+                            ? `Discrepancy: ${diff} ${prod?.unit} (stock decreases by ${Math.abs(diff)} ${prod?.unit})`
+                            : `Discrepancy: +${diff} ${prod?.unit} (stock increases by ${diff} ${prod?.unit})`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="field">
+                  <label htmlFor="modalCorrCount">
+                    Actual physical shelf count {prod ? `(${prod.unit})` : ""}
+                  </label>
+                  <input
+                    id="modalCorrCount"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={modalCorrCount}
+                    onChange={(e) => setModalCorrCount(e.target.value)}
+                    placeholder="e.g. 18"
+                    required
+                    disabled={busy}
+                  />
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalCorrCost">
+                    Verified unit cost <span className="optional">(optional)</span>
+                  </label>
+                  <input
+                    id="modalCorrCost"
+                    inputMode="decimal"
+                    placeholder="e.g. 2.10"
+                    value={modalCorrCost}
+                    onChange={(e) => setModalCorrCost(e.target.value)}
+                    disabled={busy}
+                  />
+                  <span className="field-hint">In MYR. Leave blank if unverified.</span>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalCorrPreset">Correction reason</label>
+                  <select
+                    id="modalCorrPreset"
+                    value={modalCorrReasonPreset}
+                    onChange={(e) => setModalCorrReasonPreset(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="Physical stock-take discrepancy">Physical stock-take discrepancy</option>
+                    <option value="Misplaced inventory located">Misplaced inventory located</option>
+                    <option value="Unrecorded shrinkage / missing">Unrecorded shrinkage / missing</option>
+                    <option value="Receiving count error correction">Receiving count error correction</option>
+                    <option value="Data entry mistake correction">Data entry mistake correction</option>
+                    <option value="Other">Other reason (specify below)</option>
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="modalCorrCustom">
+                    Reason explanation <span className="optional">(mandatory)</span>
+                  </label>
+                  <input
+                    id="modalCorrCustom"
+                    placeholder="Detailed explanation of discrepancy..."
+                    value={modalCorrReasonCustom}
+                    onChange={(e) => setModalCorrReasonCustom(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </div>
+
+                <div className="field full">
+                  <label htmlFor="modalCorrTime">Occurred at</label>
+                  <input
+                    id="modalCorrTime"
+                    type="datetime-local"
+                    value={modalCorrOccurredAt}
+                    onChange={(e) => setModalCorrOccurredAt(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+
+              {formError && <div className="form-error" role="alert"><AlertTriangle aria-hidden="true" />{formError}</div>}
+              <div className="dialog-actions">
+                <button type="button" className="btn btn-secondary" onClick={closeModal} disabled={busy}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={busy}>
+                  {busy ? <LoaderCircle aria-hidden="true" className="spin" /> : <Check aria-hidden="true" />}
+                  Record stock correction
+                </button>
+              </div>
+            </form>
+          );
+        })()}
       </div>
     </div>}
 

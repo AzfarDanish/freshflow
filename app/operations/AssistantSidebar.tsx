@@ -86,7 +86,7 @@ export default function AssistantSidebar({
   useEffect(() => {
     if (!insightRequest || handledInsightRequest.current === insightRequest.id) return;
     handledInsightRequest.current = insightRequest.id;
-    void ask("Explain the recorded sales and waste insights", {
+    void ask("Explain the recorded waste insights", {
       from: insightRequest.from,
       to: insightRequest.to,
       mode: "insights",
@@ -148,7 +148,7 @@ export default function AssistantSidebar({
       </header>
 
       <div className={styles.profileNotice}>
-        <span>{role === "owner" ? "Owner" : "Staff"} testing profile</span>
+        <span>{role === "owner" ? "Manager" : "Staff"} testing profile</span>
         <span className={styles.readOnly}>Read only</span>
       </div>
 
@@ -163,7 +163,7 @@ export default function AssistantSidebar({
         {messages.map((message) => (
           <article className={styles.turn} key={message.id}>
             <div className={styles.userMessage}>
-              <span className={styles.messageMeta}>You · {message.role === "owner" ? "Owner profile" : "Staff profile"}</span>
+              <span className={styles.messageMeta}>You · {message.role === "owner" ? "Manager profile" : "Staff profile"}</span>
               <p>{message.question}</p>
             </div>
             {message.error && <p className={styles.error} role="alert">{message.error}</p>}
