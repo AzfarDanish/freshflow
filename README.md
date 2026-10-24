@@ -67,7 +67,7 @@ FreshFlow Demo Shop is the sole available workspace. There is no shop selector o
 
 ### Operational data and reset
 
-- PostgreSQL is the source of truth. Existing stored datasets are read without regenerating recommendations, activity, or inventory. Seed data is created only for an uninitialized workspace or an explicitly confirmed reset.
+- Supabase-hosted PostgreSQL is the source of truth. Existing stored datasets are read without regenerating recommendations, activity, or inventory. Seed data is created only for an uninitialized workspace or an explicitly confirmed reset.
 - Successful actions persist their records and actual activity together in a transaction. Validation failures do not write changes. Pending risk recommendations are recalculated from stored inventory and settings during relevant mutations; open work reflects updated stock details, while completed outcomes and audit descriptions preserve history. Reporting a staff task never invents a stock adjustment.
 - The shared workspace state updates from each successful server response. Navigation, window focus, cross-tab notifications, and a 15-second visible-page refresh keep pages synchronized. A read started before a mutation cannot overwrite its result; unsaved settings and invoice drafts are retained during background reads.
 - Reset is available only in Settings & data. It requires a warning, acknowledgement, and server-side `payload: { confirmed: true }`. It atomically restores initial inventory, settings, pending recommendations, decisions, tasks, invoice-intake state, and initial activity history; a real reset audit entry records the operation. It is scoped to the demo workspace.
@@ -85,7 +85,7 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 | ------------- | ---------------------------- |
 | Frontend      | Next.js App Router, React, TypeScript |
 | Backend       | Next.js route handlers |
-| Database      | Replit-managed PostgreSQL; local JSON is test-only |
+| Database      | Supabase-hosted PostgreSQL (`DATABASE_URL`); JSON files are test-only |
 | AI / Compute  | Deterministic rules; no AI or RunPod dependency |
 | Hosting / Dev | Replit |
 
@@ -99,9 +99,8 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 ├── src/lib/                 # Business registry, expiry, invoice extraction, database and types
 ├── drizzle.config.ts        # PostgreSQL schema configuration
 ├── scripts/
-│   └── import-existing-state.ts # Non-destructive local/Supabase import utility
-├── supabase/
-│   └── schema.sql           # Retained legacy Supabase schema
+│   ├── import-existing-state.ts # Non-destructive local JSON import utility
+│   └── migrate-postgres-to-supabase.ts # One-time non-destructive PostgreSQL → Supabase copy
 ├── docs/                    # Screenshots, diagrams
 ├── runpod/
 │   └── handler.py           # Preserved Python starter; not used by FreshFlow
@@ -138,10 +137,10 @@ Browser ──► Next.js UI and API ──► PostgreSQL
 
 ### Option 1 — Run on Replit (Recommended)
 
-1. Import this repository into Replit and enable its managed PostgreSQL database.
-2. Run `npm run db:push` once to apply the Drizzle schema to the development database.
+1. Import this repository into Replit and add the server-side Secrets: `DATABASE_URL` (the Supabase PostgreSQL connection string), `SESSION_SECRET`, and `OPENROUTER_API_KEY`.
+2. Run `npm run db:push` once to confirm the schema matches the Supabase project.
 3. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
-4. After code merges, the configured post-merge setup installs packages and pushes the schema to the development database. Replit's Publish flow compares development and production schemas and applies production schema changes when you publish.
+4. After code merges, the configured post-merge setup installs packages and pushes the schema to the connected database. Replit's Publish flow compares development and production schemas and applies production schema changes when you publish.
 
 ### Option 2 — Run Locally
 
@@ -153,24 +152,39 @@ cd your-project
 # 2. Install Node.js and dependencies
 npm ci
 
-# 3. Start a local PostgreSQL server and create a database
-createdb freshflow
-
-# 4. Create your local environment file, then edit DATABASE_URL and SESSION_SECRET
+# 3. Create your local environment file, then edit DATABASE_URL and SESSION_SECRET
 cp .env.example .env.local
-# Generate a development-only SESSION_SECRET with: openssl rand -hex 32
-# Example DATABASE_URL format: postgresql://USER:PASSWORD@localhost:5432/freshflow
+# DATABASE_URL: your Supabase-hosted PostgreSQL connection string (session pooler URI).
+# Note: node-pg treats sslmode=require as strict verify-full and rejects Supabase's
+# private cert chain; use the session pooler URI with sslmode=no-verify instead.
+# SESSION_SECRET: generate a development-only value with: openssl rand -hex 32
 
-# 5. Apply the schema and run FreshFlow
+# 4. Confirm the schema and run FreshFlow
 npm run db:push
 npm run dev
 ```
 
 Open `http://localhost:5000`.
 
+### Database — Supabase-hosted PostgreSQL
+
+FreshFlow uses one database in every environment: the Supabase-hosted PostgreSQL project. The data layer stays on `pg` + Drizzle; no Supabase client SDK or REST Data API is used.
+
+- The runtime schema was applied to the project through the MCP migration `create_freshflow_runtime_tables` (24 October 2026). It matches `src/lib/db/schema.ts`: `freshflow_business_state`, `freshflow_invoice_documents`, `freshflow_memberships`, and `freshflow_state_backups`. Row level security is enabled and forced, and every table carries one permissive policy targeting only the app's least-privilege `freshflow_app` role, so the anon/authenticated Data API surface stays denied by default; the app connects over direct PostgreSQL server connections.
+- Hosted runs read the connection string from Replit Secrets (`DATABASE_URL`); local development sets the same variable in `.env.local`. Never commit or expose it.
+- `npm run db:push` should report no schema changes; it remains the way to sync future schema work.
+
+To carry over data from the previous PostgreSQL database (for example the former Replit-managed instance), set that connection string as `SOURCE_DATABASE_URL` and copy with the non-destructive migration tool:
+
+```bash
+SOURCE_DATABASE_URL=<previous-database-url> npm run db:migrate:supabase
+```
+
+The tool inserts only missing rows (`on conflict ... do nothing`), preserves stored timestamps and invoice file bytes, and never overwrites or deletes destination rows. The copy destination is `DATABASE_URL` (or an explicit `SUPABASE_DATABASE_URL`). Rerun it safely any time; for a fully consistent move, rerun during a quiet window with the app idle so the last writes are captured.
+
 ### Persistence and database setup
 
-- **PostgreSQL is the runtime store.** The app requires `DATABASE_URL`; Replit supplies its managed connection, while local development uses the connection in `.env.local`. The app does not silently fall back to local files. Keep local credentials out of version control and never expose the URL to client code.
+- **PostgreSQL is the runtime store.** The app requires `DATABASE_URL` — the Supabase-hosted PostgreSQL connection string — from Replit Secrets (hosted runs) or the local `.env.local`. The app does not silently fall back to local files. Keep local credentials out of version control and never expose the URL to client code.
 - `SESSION_SECRET` is required to sign and verify preview-role cookies. For local development, use a development-only random value. In Replit and production, keep it in server-side Secrets; changing it invalidates existing role previews, which fall back to Staff.
 - The read-only assistant uses `OPENROUTER_API_KEY` from Replit Secrets with the fixed OpenRouter model `deepseek/deepseek-v4-flash-0731` (DeepSeek V4 Flash 0731, not V4.1 Flash). Each question reads the current persisted business state; the model only selects a supported query, while answers and evidence are computed from those records. Assistant requests fail visibly if OpenRouter is unavailable.
 - `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the development database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Replit's Publish flow applies the development-to-production schema diff when you publish.
@@ -178,8 +192,7 @@ Open `http://localhost:5000`.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
 - Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.
 - The Owner/Staff role preview enforces the demo permission matrix in the interface and server routes, but anyone can switch preview roles; it is not authentication. Do not expose this demo API to public sensitive data.
-- For existing state, run the import before the first app request creates seed rows: `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, run `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime. Supabase migration requires access to the legacy source and was not verified against a live Supabase database.
-- `supabase/schema.sql` is retained only as a legacy reference; FreshFlow no longer uses Supabase at runtime.
+- For existing state, run the import before the first app request creates seed rows: `npm run db:import:local` imports known `.data/<business-id>.json` files into `DATABASE_URL`. It inserts only missing business rows and never overwrites destination data. The retired Supabase REST import (`db:import:supabase`, `LEGACY_SUPABASE_*` variables) was removed when FreshFlow moved fully to Supabase-hosted PostgreSQL; use `db:migrate:supabase` to copy rows between PostgreSQL databases.
 
 ### Tests and build
 
@@ -205,8 +218,9 @@ Seed inventory and simulated workflow actions are synthetic. Uploaded invoice fi
 Use this section for accurate team evidence. The app is configured to run through Replit's web preview; no hosting or deployment claim is made here.
 
 - **Development:** The FreshFlow Next.js app runs from the repository's `.replit` configuration.
-- **Database:** Replit-managed PostgreSQL stores shop state and private invoice originals.
-- **Secrets:** `DATABASE_URL` comes from Replit's managed database or the local `.env.local` file. `OPENROUTER_API_KEY`, `SESSION_SECRET`, and any legacy Supabase credentials must remain server-side and must not be exposed to the client.
+- **Database:** Supabase-hosted PostgreSQL stores shop state and private invoice originals; it is configured through `DATABASE_URL` in Replit Secrets, while Replit provides application hosting and preview.
+- **Secrets:** `DATABASE_URL` comes from Replit Secrets or the local `.env.local` file. `OPENROUTER_API_KEY`, `SESSION_SECRET`, and the Supabase PostgreSQL connection string must remain server-side and must not be exposed to the client.
+- **Migration tooling (`migration-only`):** `SOURCE_DATABASE_URL`/`SUPABASE_DATABASE_URL` exist only for the one-time PostgreSQL → Supabase copy (see the Database section) and are never used by the app at runtime.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](submission/SDC2026_TeamName_Replit_POU.pdf)
 

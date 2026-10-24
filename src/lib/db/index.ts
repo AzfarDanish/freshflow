@@ -12,7 +12,7 @@ const globalDatabase = globalThis as typeof globalThis & {
 export function getPool(): Pool {
   if (!process.env.DATABASE_URL) {
     throw new Error(
-      "DATABASE_URL is required. For local development, set it to your PostgreSQL connection in .env.local (see .env.example); in Replit, connect the managed database. FreshFlow does not silently fall back to local files.",
+      "DATABASE_URL is required. Set it to the Supabase-hosted PostgreSQL connection string in .env.local (see .env.example). FreshFlow does not silently fall back to local files.",
     );
   }
   if (!globalDatabase.freshFlowPool) {
