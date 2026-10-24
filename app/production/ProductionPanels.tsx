@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { AlertTriangle, Bot, Database, RefreshCw, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
-import type { Product, Role } from "@/src/lib/types";
-import type { AssistantResponse, OperationsResponse, StockMovement } from "@/src/lib/operational-types";
+import { Database, RefreshCw, RotateCcw, ShieldAlert, Trash2, MessageSquareText } from "lucide-react";
+import type { Product } from "@/src/lib/types";
+import type { OperationsResponse, StockMovement } from "@/src/lib/operational-types";
 import styles from "./ProductionPanels.module.css";
 
 type ApiError = { error?: string; message?: string };
@@ -44,89 +44,12 @@ function displayDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" });
 }
-
-/** Role is supplied by the host so staff queries remain scoped to allowed facts by the assistant API. */
-export function InventoryAssistant({ role }: { role: Role }) {
-  const [question, setQuestion] = useState("");
-  const [result, setResult] = useState<AssistantResponse | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const id = useId();
-
-  async function ask(event: FormEvent) {
-    event.preventDefault();
-    if (!question.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    setResult(null);
-    try {
-      const response = await apiJson<AssistantResponse>("/api/assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: question.trim() }),
-      });
-      setResult(response);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The assistant request failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className={styles.panel} aria-labelledby={`${id}-title`}>
-      <header className={styles.head}>
-        <div>
-          <h2 className={styles.title} id={`${id}-title`}>Inventory assistant</h2>
-          <p className={styles.subtitle}>Ask about recorded inventory facts. Answers include their evidence and limits.</p>
-        </div>
-        <Bot size={19} aria-hidden="true" />
-      </header>
-      <div className={styles.body}>
-        <form onSubmit={(event) => void ask(event)}>
-          <div className={styles.field}>
-            <label htmlFor={`${id}-question`}>Question</label>
-            <textarea id={`${id}-question`} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Which recorded stock issues need attention?" />
-          </div>
-          <div className={styles.actions}>
-            <button className={`${styles.button} ${styles.primary}`} type="submit" disabled={busy || !question.trim()}>
-              {busy ? "Checking records…" : "Ask assistant"}
-            </button>
-            <span className={styles.muted}>Signed in as {role} · response is grounded in available records</span>
-          </div>
-        </form>
-      </div>
-      {error && <div className={styles.feedback} role="alert"><AlertTriangle size={15} aria-hidden="true" /> {error}</div>}
-      {busy && <div className={styles.loading} aria-label="Assistant is checking records" aria-busy="true"><div className={styles.skeleton} /><div className={styles.skeleton} /></div>}
-      {result && !busy && (
-        <div className={styles.body}>
-          <article className={styles.record}>
-            <div className={styles.recordHead}><h3 className={styles.recordTitle}>Answer</h3><span className={styles.muted}>Computed {displayDate(result.computedAt)}</span></div>
-            <p className={styles.recordBody}>{result.answer}</p>
-          </article>
-          <h3 className={styles.subhead}>Supporting records <span className={styles.badge}>{result.evidence.length}</span></h3>
-          {result.evidence.length ? (
-            <div className={styles.stack}>
-              {result.evidence.map((record) => (
-                <article className={styles.record} key={record.id}>
-                  <div className={styles.recordHead}><strong className={styles.recordTitle}>{record.label}</strong><span className={styles.badge}>{record.kind}</span></div>
-                  <ul className={styles.evidence}>
-                    {Object.entries(record.facts).map(([key, value]) => <li key={key}><strong>{key}:</strong> {typeof value === "string" ? value : JSON.stringify(value)}</li>)}
-                  </ul>
-                </article>
-              ))}
-            </div>
-          ) : <p className={styles.empty}>No supporting records were returned for this answer.</p>}
-          <h3 className={styles.subhead}>Limitations</h3>
-          {result.limitations.length ? <ul className={styles.evidence}>{result.limitations.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul> : <p className={styles.muted}>No limitations reported.</p>}
-        </div>
-      )}
-    </section>
-  );
-}
-
 /** products supply recorded product/batch choices; onChanged refreshes host inventory after successful stock actions. */
-export function InsightsPanel({ products, onChanged }: { products: Product[]; onChanged: () => void }) {
+export function InsightsPanel({ products, onChanged, onExplain }: {
+  products: Product[];
+  onChanged: () => void;
+  onExplain: (range: { from: string; to: string }) => void;
+}) {
   const [from, setFrom] = useState(daysEarlier(29));
   const [to, setTo] = useState(localDate());
   const [data, setData] = useState<OperationsResponse | null>(null);
@@ -143,7 +66,6 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
-  const [insightError, setInsightError] = useState("");
   const retryRequestId = useRef<string | null>(null);
   const reversalRequests = useRef<Record<string, string>>({});
   const assistantRequestId = useId();
@@ -238,24 +160,6 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
     }
   }
 
-  async function explain() {
-    if (!data) return;
-    setBusy("assistant");
-    setInsightError("");
-    setInsightAnswer(null);
-    try {
-      const result = await apiJson<AssistantResponse>("/api/assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: "Explain the recorded sales and waste insights", from, to, mode: "insights" }),
-      });
-      setInsightAnswer(result);
-    } catch (reason) {
-      setInsightError(reason instanceof Error ? reason.message : "Could not explain these insights.");
-    } finally { setBusy(""); }
-  }
-  const [insightAnswer, setInsightAnswer] = useState<AssistantResponse | null>(null);
-
   const summary = data?.summary;
   const chartRows = summary?.daily ?? [];
   const maxValue = Math.max(1, ...chartRows.flatMap((row) => [row.revenueMinor ?? 0, row.wasteCostMinor ?? 0]));
@@ -270,8 +174,8 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
       </header>
       <div className={styles.body}>
         <div className={styles.filterRow}>
-          <div className={styles.field}><label htmlFor={`${assistantRequestId}-from`}>From</label><input id={`${assistantRequestId}-from`} type="date" value={from} max={to} onChange={(event) => { setFrom(event.target.value); setInsightAnswer(null); setInsightError(""); }} /></div>
-          <div className={styles.field}><label htmlFor={`${assistantRequestId}-to`}>To</label><input id={`${assistantRequestId}-to`} type="date" value={to} min={from} onChange={(event) => { setTo(event.target.value); setInsightAnswer(null); setInsightError(""); }} /></div>
+          <div className={styles.field}><label htmlFor={`${assistantRequestId}-from`}>From</label><input id={`${assistantRequestId}-from`} type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></div>
+          <div className={styles.field}><label htmlFor={`${assistantRequestId}-to`}>To</label><input id={`${assistantRequestId}-to`} type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></div>
         </div>
       </div>
       {error && <div className={styles.feedback} role="alert">{error} <button className={styles.button} type="button" onClick={() => void load()}>Retry</button></div>}
@@ -312,9 +216,7 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
               <div className={styles.chartLegend}><span className={styles.legendItem}><i className={styles.legendMark} />Sale revenue</span><span className={styles.legendItem}><i className={styles.legendMarkWaste} />Waste cost</span></div>
             </div>
           ) : <p className={styles.empty}>No daily records in this date range.</p>}
-          <div className={styles.actions}><button type="button" className={styles.button} onClick={() => void explain()} disabled={busy === "assistant"}>{busy === "assistant" ? "Preparing explanation…" : "Explain recorded insights"}</button></div>
-          {insightError && <div className={styles.feedback} role="alert">{insightError}</div>}
-          {insightAnswer && <article className={styles.record} style={{ marginTop: 12 }}><div className={styles.recordHead}><strong className={styles.recordTitle}>Assistant explanation</strong><span className={styles.muted}>{displayDate(insightAnswer.computedAt)}</span></div><p className={styles.recordBody}>{insightAnswer.answer}</p>{insightAnswer.evidence.length > 0 && <ul className={styles.evidence}>{insightAnswer.evidence.map((item) => <li key={item.id}>{item.label} ({item.kind})</li>)}</ul>}{insightAnswer.limitations.length > 0 && <p className={styles.muted}>Limitations: {insightAnswer.limitations.join(" ")}</p>}</article>}
+          <div className={styles.actions}><button type="button" className={styles.button} onClick={() => onExplain({ from, to })} disabled={!data || loading || Boolean(busy)}><MessageSquareText size={14} aria-hidden="true" />Ask the sidebar assistant about this period</button></div>
           <h3 className={styles.subhead}>Record a stock movement</h3>
           <form onSubmit={(event) => void submitMovement(event)}>
             <div className={styles.grid}>

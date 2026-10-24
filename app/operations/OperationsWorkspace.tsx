@@ -5,7 +5,7 @@ import type { FormEvent, ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList,
+  AlertTriangle, Bot, CalendarDays, Check, CheckCircle2, ClipboardList,
   Info, LoaderCircle, Package, Pencil, Plus, RefreshCw, RotateCcw, Search,
   Settings2, ShieldAlert, SlidersHorizontal, Sparkles, X, XCircle, Activity, Gauge,
   Trash2,
@@ -15,6 +15,8 @@ import { OPERATIONS, operationForPath } from "@/src/lib/operation-navigation";
 import type { OperationId } from "@/src/lib/operation-navigation";
 import { canAccessOperation } from "@/src/lib/access-control";
 import { OperationPageContext } from "./OperationPage";
+import AssistantSidebar from "./AssistantSidebar";
+import type { InsightsAssistantRequest } from "./AssistantSidebar";
 import { TASK_OUTCOME_LABELS, TASK_PROGRESS_LABELS } from "@/src/lib/types";
 import type { AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType, TaskProgressType } from "@/src/lib/types";
 import {
@@ -28,7 +30,7 @@ import { Sidebar } from "@/app/operations/Sidebar";
 import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/ui";
 import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
 import type { Role } from "@/app/operations/workflow";
-import { InventoryAssistant, InsightsPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
+import { InsightsPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
 import { InvoiceReceivingPanel } from "@/app/production/InvoiceReceivingPanel";
 
 type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "progress" | "complete" | "reset" | null;
@@ -86,6 +88,14 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
   const [invoiceDrafts, setInvoiceDrafts] = useState<Record<string, InvoiceProposalDraft>>({});
   const dialogRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const assistantToggleRef = useRef<HTMLButtonElement>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [insightsAssistantRequest, setInsightsAssistantRequest] = useState<InsightsAssistantRequest | null>(null);
+
+  const closeAssistant = useCallback(() => {
+    setAssistantOpen(false);
+    requestAnimationFrame(() => assistantToggleRef.current?.focus());
+  }, []);
 
   const state = response?.state ?? emptyState;
   const businessName = "this workspace";
@@ -478,8 +488,14 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           </Section>
         </>}
 
-        {page === "overview" && !loading && <InventoryAssistant role={role} />}
-        {page === "insights" && <InsightsPanel products={state.products} onChanged={() => void loadState(businessId)} />}
+        {page === "insights" && <InsightsPanel
+          products={state.products}
+          onChanged={() => void loadState(businessId)}
+          onExplain={({ from, to }) => {
+            setInsightsAssistantRequest({ id: crypto.randomUUID(), from, to });
+            setAssistantOpen(true);
+          }}
+        />}
         {page === "decisions" &&
           <Section id="decisions" icon={Sparkles} title="Decisions" description={role === "owner" ? "Review each rule-based recommendation, then approve or reject" : "Owner decisions on rule-based recommendations"} meta={loading ? undefined : `${pendingCount} pending`} className="scroll-panel">
             {loading ? <LoadingRows label="Loading recommendations" /> :
@@ -612,6 +628,18 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
               ))}
             </div>
           </div>
+          <button
+            ref={assistantToggleRef}
+            type="button"
+            className="assistant-toggle"
+            aria-label={assistantOpen ? "Close AI assistant" : "Open AI assistant"}
+            aria-expanded={assistantOpen}
+            aria-controls="freshflow-assistant-sidebar"
+            onClick={() => assistantOpen ? closeAssistant() : setAssistantOpen(true)}
+          >
+            <Bot aria-hidden="true" size={16} />
+            <span>AI assistant</span>
+          </button>
         </div>
       </header>
       <div className="operation-page" ref={contentRef}>
@@ -620,6 +648,13 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </OperationPageContext.Provider>
       </div>
     </main>
+
+    <AssistantSidebar
+      open={assistantOpen}
+      role={role}
+      insightRequest={insightsAssistantRequest}
+      onClose={closeAssistant}
+    />
 
     {modal && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) closeModal(); }}>
       <div className={`dialog ${modal === "reset" || modal === "delete" ? "dialog-danger" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-intro" ref={dialogRef} tabIndex={-1}>
