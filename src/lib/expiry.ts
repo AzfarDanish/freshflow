@@ -3,6 +3,8 @@ import type {
   Recommendation,
   RiskType,
 } from "@/src/lib/types";
+import { DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
+import { randomUUID } from "node:crypto";
 
 export const DEMO_DATE = "2026-10-24";
 const SEED_TIME = "2026-10-24T08:00:00.000Z";
@@ -103,13 +105,21 @@ export function createSeedState(): AppState {
   return state;
 }
 
+export function createBusinessSeedState(businessId: string): AppState {
+  if (businessId === DEFAULT_BUSINESS_ID) return createSeedState();
+  return {
+    products: [],
+    recommendations: [],
+    tasks: [],
+    activity: [],
+    settings: { thresholdDays: 7, demoDate: DEMO_DATE },
+  };
+}
+
 export function reconcileRisks(
   state: AppState,
   now = new Date().toISOString(),
 ): boolean {
-  const knownRecommendationIds = new Set(
-    state.recommendations.map((recommendation) => recommendation.id),
-  );
   let changed = false;
 
   for (const product of state.products) {
@@ -119,51 +129,109 @@ export function reconcileRisks(
         state.settings.demoDate,
         state.settings.thresholdDays,
       );
-      if (!risk) continue;
-      const recommendationId = `risk-${batch.id}`;
-      if (knownRecommendationIds.has(recommendationId)) continue;
+      const pendingRecommendation = state.recommendations.find(
+        (recommendation) =>
+          recommendation.batchId === batch.id &&
+          recommendation.status === "pending",
+      );
+      if (!risk) {
+        if (pendingRecommendation) {
+          state.recommendations = state.recommendations.filter(
+            (recommendation) => recommendation !== pendingRecommendation,
+          );
+          changed = true;
+        }
+        continue;
+      }
 
-      const recommendation: Recommendation = {
-        id: recommendationId,
-        batchId: batch.id,
-        productId: product.id,
-        productName: product.name,
-        sku: product.sku,
-        quantity: batch.quantity,
-        unit: product.unit,
-        expiryDate: batch.expiryDate,
-        daysUntilExpiry: risk.daysUntilExpiry,
-        riskType: risk.riskType,
-        suggestedAction:
-          risk.riskType === "expired"
-            ? "Inspect and set aside this expired batch. Ask the owner to confirm the store's handling procedure."
-            : "Ask the owner to approve a stock rotation check and discuss a promotion if appropriate.",
-        explanation: explainRisk(
-          risk.riskType,
-          risk.daysUntilExpiry,
-          batch.quantity,
-          product.unit,
-          batch.expiryDate,
-          state.settings.thresholdDays,
-        ),
-        status: "pending",
-        createdAt: now,
-        simulated: true,
-      };
+      if (pendingRecommendation) {
+        const updatedRecommendation = buildRecommendation(
+          pendingRecommendation.id,
+          product,
+          batch,
+          state,
+          risk,
+          pendingRecommendation.createdAt,
+        );
+        if (
+          JSON.stringify(pendingRecommendation) !==
+          JSON.stringify(updatedRecommendation)
+        ) {
+          Object.assign(pendingRecommendation, updatedRecommendation);
+          changed = true;
+        }
+        continue;
+      }
+
+      const matchingHistoricalRecommendation = state.recommendations.some(
+        (recommendation) =>
+          recommendation.batchId === batch.id &&
+          recommendation.productId === product.id &&
+          recommendation.quantity === batch.quantity &&
+          recommendation.expiryDate === batch.expiryDate,
+      );
+      if (matchingHistoricalRecommendation) continue;
+
+      const recommendation = buildRecommendation(
+        `risk-${randomUUID()}`,
+        product,
+        batch,
+        state,
+        risk,
+        now,
+      );
       state.recommendations.push(recommendation);
       state.activity.push({
-        id: `event-risk-${batch.id}`,
+        id: `event-${randomUUID()}`,
         type: "risk_detected",
         title: `${risk.riskType === "expired" ? "Expired stock" : "Expiry risk"} detected`,
         description: `${product.name} · batch ${batch.id} · ${batch.quantity} ${product.unit}. ${recommendation.explanation}`,
         occurredAt: now,
+        productId: product.id,
+        batchId: batch.id,
         simulated: true,
       });
-      knownRecommendationIds.add(recommendationId);
       changed = true;
     }
   }
   return changed;
+}
+
+function buildRecommendation(
+  id: string,
+  product: AppState["products"][number],
+  batch: AppState["products"][number]["batches"][number],
+  state: AppState,
+  risk: { riskType: RiskType; daysUntilExpiry: number },
+  createdAt: string,
+): Recommendation {
+  return {
+    id,
+    batchId: batch.id,
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    quantity: batch.quantity,
+    unit: product.unit,
+    expiryDate: batch.expiryDate,
+    daysUntilExpiry: risk.daysUntilExpiry,
+    riskType: risk.riskType,
+    suggestedAction:
+      risk.riskType === "expired"
+        ? "Inspect and set aside this expired batch. Ask the owner to confirm the store's handling procedure."
+        : "Ask the owner to approve a stock rotation check and discuss a promotion if appropriate.",
+    explanation: explainRisk(
+      risk.riskType,
+      risk.daysUntilExpiry,
+      batch.quantity,
+      product.unit,
+      batch.expiryDate,
+      state.settings.thresholdDays,
+    ),
+    status: "pending",
+    createdAt,
+    simulated: true,
+  };
 }
 
 function explainRisk(

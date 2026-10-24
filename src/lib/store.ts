@@ -3,7 +3,12 @@ import "server-only";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createSeedState, reconcileRisks } from "@/src/lib/expiry";
+import {
+  BUSINESS_WORKSPACES,
+  DEFAULT_BUSINESS_ID,
+  requireBusinessWorkspace,
+} from "@/src/lib/businesses";
+import { createBusinessSeedState, reconcileRisks } from "@/src/lib/expiry";
 import type {
   ActivityEvent,
   AppState,
@@ -14,16 +19,23 @@ import type {
   StaffTask,
 } from "@/src/lib/types";
 
-const SUPABASE_TABLE = "freshflow_state";
-const STATE_ROW_ID = "demo";
+const SUPABASE_TABLE = "freshflow_business_state";
 
 let operationQueue: Promise<unknown> = Promise.resolve();
 
-function localStatePath(): string {
+function localStatePath(businessId: string): string {
   const configuredPath = process.env.FRESHFLOW_LOCAL_STATE_PATH?.trim();
-  return configuredPath
-    ? path.resolve(configuredPath)
-    : path.join(process.cwd(), ".data", "freshflow-demo.json");
+  if (!configuredPath) {
+    return path.join(process.cwd(), ".data", `${businessId}.json`);
+  }
+  const resolvedPath = path.resolve(configuredPath);
+  if (businessId === DEFAULT_BUSINESS_ID) return resolvedPath;
+  const extension = path.extname(resolvedPath) || ".json";
+  const baseName = path.basename(resolvedPath, path.extname(resolvedPath));
+  return path.join(/*turbopackIgnore: true*/
+    path.dirname(resolvedPath),
+    `${baseName}.${businessId}${extension}`,
+  );
 }
 
 function exclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -79,9 +91,9 @@ async function supabaseRequest(
   });
 }
 
-async function readSupabaseState(): Promise<AppState | null> {
+async function readSupabaseState(businessId: string): Promise<AppState | null> {
   const response = await supabaseRequest(
-    `${SUPABASE_TABLE}?id=eq.${STATE_ROW_ID}&select=state`,
+    `${SUPABASE_TABLE}?business_id=eq.${encodeURIComponent(businessId)}&select=state`,
   );
   if (!response.ok) {
     throw new Error(
@@ -99,12 +111,39 @@ async function readSupabaseState(): Promise<AppState | null> {
   return rows[0].state;
 }
 
-async function writeSupabaseState(state: AppState): Promise<void> {
-  const response = await supabaseRequest(`${SUPABASE_TABLE}?on_conflict=id`, {
+async function insertInitialSupabaseState(
+  businessId: string,
+  state: AppState,
+): Promise<AppState> {
+  const response = await supabaseRequest(SUPABASE_TABLE, {
     method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify([{ id: STATE_ROW_ID, state }]),
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify([{ business_id: businessId, state }]),
   });
+  if (response.ok) return state;
+  if (response.status === 409) {
+    const existing = await readSupabaseState(businessId);
+    if (existing) return existing;
+  }
+  throw new Error(
+    `Supabase initialization failed (${response.status}). Check the business-state table and database setup.`,
+  );
+}
+
+async function writeSupabaseState(
+  businessId: string,
+  state: AppState,
+): Promise<void> {
+  const response = await supabaseRequest(
+    `${SUPABASE_TABLE}?on_conflict=business_id`,
+    {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify([
+        { business_id: businessId, state, updated_at: new Date().toISOString() },
+      ]),
+    },
+  );
   if (!response.ok) {
     throw new Error(
       `Supabase write failed (${response.status}). Check table access and database setup.`,
@@ -112,9 +151,12 @@ async function writeSupabaseState(state: AppState): Promise<void> {
   }
 }
 
-async function readLocalState(): Promise<AppState | null> {
+async function readLocalState(businessId: string): Promise<AppState | null> {
   try {
-    const contents = await readFile(localStatePath(), "utf8");
+    const contents = await readFile(
+      /*turbopackIgnore: true*/ localStatePath(businessId),
+      "utf8",
+    );
     const parsed = JSON.parse(contents) as AppState;
     if (!isAppState(parsed)) {
       throw new Error("The local demo state has an invalid structure.");
@@ -138,8 +180,11 @@ function isAppState(value: unknown): value is AppState {
   );
 }
 
-async function writeLocalState(state: AppState): Promise<void> {
-  const statePath = localStatePath();
+async function writeLocalState(
+  businessId: string,
+  state: AppState,
+): Promise<void> {
+  const statePath = localStatePath(businessId);
   await mkdir(path.dirname(statePath), { recursive: true });
   const temporaryPath = `${statePath}.${randomUUID()}.tmp`;
   await writeFile(temporaryPath, JSON.stringify(state, null, 2), {
@@ -149,51 +194,80 @@ async function writeLocalState(state: AppState): Promise<void> {
   await rename(temporaryPath, statePath);
 }
 
-async function loadState(): Promise<{
+async function loadState(businessId: string): Promise<{
   state: AppState;
   mode: PersistenceMode;
-  existed: boolean;
 }> {
+  const business = requireBusinessWorkspace(businessId);
   const mode = persistenceMode();
   const stored =
-    mode === "supabase" ? await readSupabaseState() : await readLocalState();
-  return { state: stored ?? createSeedState(), mode, existed: stored !== null };
+    mode === "supabase"
+      ? await readSupabaseState(business.id)
+      : await readLocalState(business.id);
+  if (stored) return { state: stored, mode };
+
+  const initialState = createBusinessSeedState(business.id);
+  const state =
+    mode === "supabase"
+      ? await insertInitialSupabaseState(business.id, initialState)
+      : initialState;
+  if (mode === "local_demo") {
+    await writeLocalState(business.id, state);
+  }
+  return { state, mode };
 }
 
 async function saveState(
+  businessId: string,
   state: AppState,
   mode: PersistenceMode,
 ): Promise<void> {
-  if (mode === "supabase") return writeSupabaseState(state);
-  return writeLocalState(state);
+  if (mode === "supabase") return writeSupabaseState(businessId, state);
+  return writeLocalState(businessId, state);
 }
 
-export async function getCurrentState(): Promise<{
+export async function getCurrentState(
+  businessId = DEFAULT_BUSINESS_ID,
+): Promise<{
   state: AppState;
   persistenceMode: PersistenceMode;
+  businessId: string;
+  business: (typeof BUSINESS_WORKSPACES)[number];
+  businesses: typeof BUSINESS_WORKSPACES;
 }> {
   return exclusive(async () => {
-    const loaded = await loadState();
+    const business = requireBusinessWorkspace(businessId);
+    const loaded = await loadState(business.id);
     const changed = reconcileRisks(loaded.state);
-    if (!loaded.existed || changed) {
-      await saveState(loaded.state, loaded.mode);
+    if (changed) {
+      await saveState(business.id, loaded.state, loaded.mode);
     }
-    return { state: loaded.state, persistenceMode: loaded.mode };
+    return {
+      state: loaded.state,
+      persistenceMode: loaded.mode,
+      businessId: business.id,
+      business,
+      businesses: BUSINESS_WORKSPACES,
+    };
   });
 }
 
 export async function dispatchAction(
   action: InventoryAction,
+  businessId = DEFAULT_BUSINESS_ID,
 ): Promise<{ state: AppState; persistenceMode: PersistenceMode }> {
   return exclusive(async () => {
-    const loaded = await loadState();
+    const business = requireBusinessWorkspace(businessId);
+    const loaded = await loadState(business.id);
     const now = new Date().toISOString();
     const state = loaded.state;
-    if (!loaded.existed) reconcileRisks(state);
 
     switch (action.type) {
       case "add_inventory":
         addInventory(state, action.payload, now);
+        break;
+      case "edit_inventory":
+        editInventory(state, action.payload, now);
         break;
       case "set_threshold":
         state.settings.thresholdDays = action.payload.thresholdDays;
@@ -215,23 +289,40 @@ export async function dispatchAction(
         completeTask(state, action.payload, now);
         break;
       case "reset": {
-        const resetState = createSeedState();
+        if (!business.simulated || !containsOnlySyntheticRecords(state)) {
+          throw new Error(
+            "This shop contains non-demo records and cannot be reset as a demo.",
+          );
+        }
+        const resetState = createBusinessSeedState(business.id);
         addActivity(resetState, {
           type: "demo_reset",
           title: "Demo reset",
           description: "The synthetic inventory and workflow were restored to their starting state.",
           occurredAt: now,
         });
-        await saveState(resetState, loaded.mode);
+        await saveState(business.id, resetState, loaded.mode);
         return { state: resetState, persistenceMode: loaded.mode };
       }
       default:
         assertNever(action);
     }
     reconcileRisks(state, now);
-    await saveState(state, loaded.mode);
+    await saveState(business.id, state, loaded.mode);
     return { state, persistenceMode: loaded.mode };
   });
+}
+
+function containsOnlySyntheticRecords(state: AppState): boolean {
+  return (
+    state.products.every((product) => product.simulated === true) &&
+    state.products.every((product) =>
+      product.batches.every((batch) => batch.simulated === true),
+    ) &&
+    state.recommendations.every((recommendation) => recommendation.simulated === true) &&
+    state.tasks.every((task) => task.simulated === true) &&
+    state.activity.every((event) => event.simulated === true)
+  );
 }
 
 function addInventory(
@@ -283,6 +374,81 @@ function addInventory(
     title: "Inventory batch added",
     description: `${product.name} · batch ${batchId} · ${input.quantity} ${product.unit} · expires ${input.expiryDate}. This entry is simulated demo data.`,
     occurredAt: now,
+    productId: product.id,
+    batchId,
+  });
+}
+
+function editInventory(
+  state: AppState,
+  input: Extract<InventoryAction, { type: "edit_inventory" }>["payload"],
+  now: string,
+): void {
+  const product = state.products.find((item) => item.id === input.productId);
+  if (!product) throw new Error("Product not found in this shop.");
+  const batch = product.batches.find(
+    (item) => item.id === input.originalBatchId,
+  );
+  if (!batch) throw new Error("Inventory batch not found in this shop.");
+
+  const productName = input.productName.trim();
+  const sku = input.sku.trim().toUpperCase();
+  const category = input.category.trim();
+  const unit = input.unit.trim();
+  const batchId = input.batchId.trim().toUpperCase();
+  if (!productName || !sku || !category || !unit || !batchId) {
+    throw new Error("Complete every product and batch field.");
+  }
+  if (!Number.isInteger(input.quantity) || input.quantity < 1) {
+    throw new Error("Quantity must be a whole number greater than zero.");
+  }
+  if (!isValidInventoryDate(input.expiryDate)) {
+    throw new Error("Enter a valid expiry date.");
+  }
+  const skuConflict = state.products.find(
+    (item) => item.id !== product.id && item.sku.toUpperCase() === sku,
+  );
+  if (skuConflict) throw new Error("That SKU is already used by another product.");
+  const batchConflict = state.products.some((item) =>
+    item.batches.some(
+      (other) =>
+        other !== batch && other.id.toUpperCase() === batchId,
+    ),
+  );
+  if (batchConflict) throw new Error("That batch ID is already in use.");
+
+  const previous = {
+    productName: product.name,
+    sku: product.sku,
+    category: product.category,
+    unit: product.unit,
+    batchId: batch.id,
+    quantity: batch.quantity,
+    expiryDate: batch.expiryDate,
+  };
+  product.name = productName;
+  product.sku = sku;
+  product.category = category;
+  product.unit = unit;
+  batch.id = batchId;
+  batch.quantity = input.quantity;
+  batch.expiryDate = input.expiryDate;
+
+  if (previous.batchId !== batch.id) {
+    state.recommendations = state.recommendations.filter(
+      (recommendation) =>
+        recommendation.batchId !== previous.batchId ||
+        recommendation.status !== "pending",
+    );
+  }
+
+  addActivity(state, {
+    type: "inventory_edited",
+    title: "Inventory batch updated",
+    description: `${previous.productName} · ${previous.batchId} was updated to ${product.name} · ${batch.id}; quantity ${previous.quantity} → ${batch.quantity} ${product.unit}; expiry ${previous.expiryDate} → ${batch.expiryDate}. This is a simulated inventory change.`,
+    occurredAt: now,
+    productId: product.id,
+    batchId: batch.id,
   });
 }
 
@@ -396,6 +562,15 @@ function addActivity(
     id: `event-${randomUUID()}`,
     simulated: true,
   });
+}
+
+function isValidInventoryDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return (
+    Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value
+  );
 }
 
 function assertNever(value: never): never {

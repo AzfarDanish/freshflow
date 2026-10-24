@@ -1,17 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   Activity, AlertTriangle, ArrowDownRight, Check, CheckCircle2,
   ChevronDown, CircleHelp, ClipboardList, Clock3, Leaf, LoaderCircle,
-  Package, Plus, RefreshCw, RotateCcw, SlidersHorizontal, Sparkles,
+  Package, Pencil, Plus, RefreshCw, RotateCcw, Search, SlidersHorizontal, Sparkles,
   X, XCircle,
 } from "lucide-react";
-import type { ActivityEvent, AppState, InventoryAction, Product, Recommendation, StaffTask, StateResponse } from "@/src/lib/types";
+import { BUSINESS_WORKSPACES, DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
+import type { ActivityEvent, AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse } from "@/src/lib/types";
 
 type Role = "owner" | "staff";
-type ModalKind = "add" | "approve" | "reject" | "complete" | "reset" | null;
+type ModalKind = "add" | "edit" | "approve" | "reject" | "complete" | "reset" | null;
+type InventorySelection = { product: Product; batch: InventoryBatch };
+type InventoryFilter = "all" | "expired" | "approaching" | "safe";
 
 const emptyState: AppState = {
   products: [], recommendations: [], tasks: [], activity: [],
@@ -73,6 +76,7 @@ function activityIcon(event: ActivityEvent) {
     case "rejected": return <XCircle size={14} />;
     case "task_completed": return <Check size={14} />;
     case "inventory_added": return <Package size={14} />;
+    case "inventory_edited": return <Pencil size={14} />;
     case "settings_changed": return <SlidersHorizontal size={14} />;
     case "demo_reset": return <RotateCcw size={14} />;
     default: return <Activity size={14} />;
@@ -81,6 +85,8 @@ function activityIcon(event: ActivityEvent) {
 
 export default function HomePage() {
   const [response, setResponse] = useState<StateResponse | null>(null);
+  const loadRequestId = useRef(0);
+  const [businessId, setBusinessId] = useState(DEFAULT_BUSINESS_ID);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -96,25 +102,32 @@ export default function HomePage() {
   const [assignee, setAssignee] = useState("Aina");
   const [rejectReason, setRejectReason] = useState("");
   const [outcome, setOutcome] = useState("");
+  const [selectedInventory, setSelectedInventory] = useState<InventorySelection | null>(null);
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>("all");
 
   const state = response?.state ?? emptyState;
-  const loadState = useCallback(async () => {
+  const loadState = useCallback(async (targetBusinessId: string) => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     setLoadError("");
     try {
-      const res = await fetch("/api/state", { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
+      const query = new URLSearchParams({ businessId: targetBusinessId });
+      const res = await fetch(`/api/state?${query}`, { method: "GET", headers: { Accept: "application/json" }, cache: "no-store" });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Could not load the latest shop state.");
+      if (requestId !== loadRequestId.current) return;
       setResponse(body as StateResponse);
       setThresholdDraft((body as StateResponse).state.settings.thresholdDays);
     } catch (error) {
+      if (requestId !== loadRequestId.current) return;
       setLoadError(error instanceof Error ? error.message : "Could not load the latest shop state.");
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { void loadState(); }, [loadState]);
+  useEffect(() => { void loadState(businessId); }, [businessId, loadState]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2600);
@@ -128,7 +141,7 @@ export default function HomePage() {
       const res = await fetch("/api/action", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(action),
+        body: JSON.stringify({ businessId, action }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "That action could not be saved.");
@@ -149,7 +162,7 @@ export default function HomePage() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [businessId]);
 
   const batches = useMemo(() => productBatches(state.products, state.settings.demoDate, state.settings.thresholdDays), [state.products, state.settings.demoDate, state.settings.thresholdDays]);
   const pendingRecommendations = state.recommendations.filter((recommendation) => recommendation.status === "pending");
@@ -163,13 +176,43 @@ export default function HomePage() {
   const openTasks = state.tasks.filter((task) => task.status === "open");
   const totalUnits = state.products.reduce((sum, product) => sum + product.batches.reduce((subtotal, batch) => subtotal + batch.quantity, 0), 0);
   const activity = [...state.activity].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  const inventoryRows = state.products.flatMap((product) =>
+    product.batches.map((batch) => ({ product, batch })),
+  );
+  const filteredInventory = inventoryRows.filter(({ product, batch }) => {
+    const daysUntilExpiry = daysBetween(state.settings.demoDate, batch.expiryDate);
+    const riskMatches =
+      inventoryFilter === "all" ||
+      (inventoryFilter === "expired" && daysUntilExpiry < 0) ||
+      (inventoryFilter === "approaching" &&
+        daysUntilExpiry >= 0 &&
+        daysUntilExpiry <= state.settings.thresholdDays) ||
+      (inventoryFilter === "safe" &&
+        daysUntilExpiry > state.settings.thresholdDays);
+    const haystack = [
+      product.name,
+      product.sku,
+      product.category,
+      product.unit,
+      batch.id,
+      batch.expiryDate,
+    ].join(" ").toLowerCase();
+    return riskMatches && haystack.includes(inventoryQuery.trim().toLowerCase());
+  });
 
-  function openModal(kind: ModalKind, recommendation?: Recommendation, task?: StaffTask) {
+  function openModal(kind: ModalKind, recommendation?: Recommendation, task?: StaffTask, inventory?: InventorySelection) {
     setActionError("");
     setFormError("");
     setSelectedRecommendation(recommendation ?? null);
     setSelectedTask(task ?? null);
+    setSelectedInventory(inventory ?? null);
     setModal(kind);
+  }
+
+  function changeBusiness(nextBusinessId: string) {
+    loadRequestId.current += 1;
+    setResponse(null);
+    setBusinessId(nextBusinessId);
   }
 
   function submitInventory(event: FormEvent<HTMLFormElement>) {
@@ -186,7 +229,24 @@ export default function HomePage() {
       setFormError("Enter all fields and a whole-number quantity greater than zero.");
       return;
     }
-    void sendAction({ type: "add_inventory", payload: { productName, sku, category, unit, batchId, quantity, expiryDate } }, "Stock batch added to the demo.");
+    if (modal === "edit" && selectedInventory) {
+      void sendAction({
+        type: "edit_inventory",
+        payload: {
+          productId: selectedInventory.product.id,
+          originalBatchId: selectedInventory.batch.id,
+          batchId,
+          productName,
+          sku,
+          category,
+          unit,
+          quantity,
+          expiryDate,
+        },
+      }, "Inventory batch updated.");
+      return;
+    }
+    void sendAction({ type: "add_inventory", payload: { productName, sku, category, unit, batchId, quantity, expiryDate } }, "Stock batch added to this demo shop.");
   }
 
   function approveRecommendation() {
@@ -228,6 +288,19 @@ export default function HomePage() {
       <header className="topbar">
         <div className="crumb">Operations <span> / </span> <b>Today</b></div>
         <div className="top-actions">
+          <div className="business-select">
+            <label htmlFor="business">Demo shop</label>
+            <select
+              id="business"
+              value={businessId}
+              onChange={(event) => changeBusiness(event.target.value)}
+              disabled={busy || modal !== null}
+            >
+              {(response?.businesses ?? BUSINESS_WORKSPACES).map((business) => (
+                <option key={business.id} value={business.id}>{business.name}</option>
+              ))}
+            </select>
+          </div>
           <div className="mode-pill" title={response?.persistenceMode === "supabase" ? "Persisted with Supabase" : "Stored in local demo mode"}><span className="mode-dot" />{response?.persistenceMode === "supabase" ? "Supabase" : "Local demo"}</div>
           <div className="role-select"><label htmlFor="role">Demo role</label><select id="role" value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="owner">Owner</option><option value="staff">Staff</option></select><ChevronDown size={12} /></div>
         </div>
@@ -238,9 +311,9 @@ export default function HomePage() {
         <div className="date-meta"><Clock3 />Demo date <strong>{dateLabel(state.settings.demoDate)}</strong></div>
       </div>
 
-      <div className="notice"><CircleHelp size={15} /><span><strong>Synthetic demo data.</strong> Role switching is a convenience for trying owner and staff flows—not authentication or secure authorization. Records and events are simulated.</span><span className="notice-right">NO LIVE INVENTORY</span></div>
+      <div className="notice"><CircleHelp size={15} /><span><strong>Synthetic demo data.</strong> Shop and role switching are demonstration conveniences—not authentication or secure data isolation. Records and events are simulated.</span><span className="notice-right">NO LIVE INVENTORY</span></div>
 
-      {loadError ? <div className="error-card" role="alert">{loadError}<button className="btn btn-small" onClick={() => void loadState()} style={{ marginLeft: 12 }}><RefreshCw size={13} /> Retry</button></div> : <>
+      {loadError ? <div className="error-card" role="alert">{loadError}<button className="btn btn-small" onClick={() => void loadState(businessId)} style={{ marginLeft: 12 }}><RefreshCw size={13} /> Retry</button></div> : <>
         <div className="metrics">
           <div className="metric alert"><div className="metric-label">Expired batches</div><div className="metric-number">{loading ? "—" : batches.expired.length}<small>separate from approaching</small></div></div>
           <div className="metric warn"><div className="metric-label">Approaching</div><div className="metric-number">{loading ? "—" : batches.approaching.length}<small>within {state.settings.thresholdDays} days</small></div></div>
@@ -265,6 +338,58 @@ export default function HomePage() {
                 <BatchRows items={batches.approaching} demoDate={state.settings.demoDate} />
                 {!state.products.length && <Empty>No products yet. Add a simulated stock batch to get started.</Empty>}
               </div>}
+            </Panel>
+
+            <Panel>
+              <div className="panel-head inventory-management-head">
+                <div>
+                  <div className="panel-title"><Package />Inventory records</div>
+                  <div className="panel-subtitle">All batches for {response?.business.name ?? "this demo shop"}</div>
+                </div>
+                <div className="inventory-controls">
+                  <label className="inventory-search">
+                    <Search size={14} />
+                    <span className="sr-only">Search inventory</span>
+                    <input
+                      type="search"
+                      value={inventoryQuery}
+                      onChange={(event) => setInventoryQuery(event.target.value)}
+                      placeholder="Search products or batches"
+                    />
+                  </label>
+                  <label>
+                    <span className="sr-only">Filter inventory</span>
+                    <select
+                      value={inventoryFilter}
+                      onChange={(event) => setInventoryFilter(event.target.value as InventoryFilter)}
+                    >
+                      <option value="all">All stock</option>
+                      <option value="expired">Expired</option>
+                      <option value="approaching">Approaching</option>
+                      <option value="safe">No current risk</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              {loading ? <div className="loading-panel"><div className="skeleton loading-line" /><div className="skeleton loading-line" /></div> :
+                filteredInventory.length ? <div className="inventory-table-wrap">
+                  <div className="inventory-table-head">
+                    <span>Product</span><span>Batch</span><span>Quantity</span><span>Expiry</span><span>Risk</span><span>Action</span>
+                  </div>
+                  {filteredInventory.map(({ product, batch }) => {
+                    const days = daysBetween(state.settings.demoDate, batch.expiryDate);
+                    const riskClass = days < 0 ? "risk-expired" : days <= state.settings.thresholdDays ? "risk-approaching" : "risk-safe";
+                    const riskLabel = days < 0 ? "Expired" : days <= state.settings.thresholdDays ? `${days}d left` : "No current risk";
+                    return <div className="inventory-table-row" key={`${product.id}-${batch.id}`}>
+                      <div><b>{product.name}</b><small>{product.sku} · {product.category}</small></div>
+                      <span className="batch-date">{batch.id}</span>
+                      <span className="qty">{batch.quantity} {product.unit}</span>
+                      <span className="batch-date">{dateLabel(batch.expiryDate)}</span>
+                      <span><span className={`risk-tag ${riskClass}`}>{riskLabel}</span></span>
+                      <button className="btn btn-small" onClick={() => openModal("edit", undefined, undefined, { product, batch })} disabled={busy}><Pencil />Edit</button>
+                    </div>;
+                  })}
+                </div> : <Empty>{inventoryRows.length ? "No inventory matches these search and filter settings." : "This demo shop has no inventory yet. Add a batch to get started."}</Empty>}
             </Panel>
 
             <Panel>
@@ -303,29 +428,29 @@ export default function HomePage() {
 
       <div className="footer-actions" style={{ justifyContent: "space-between", marginTop: 17 }}>
         <span className="small-mono">State syncs after each action</span>
-        <div className="footer-actions"><button className="btn btn-small btn-quiet" onClick={() => void loadState()} disabled={loading || busy}><RefreshCw />Refresh state</button><button className="btn btn-small btn-quiet" onClick={() => openModal("reset")} disabled={busy}><RotateCcw />Reset demo</button></div>
+        <div className="footer-actions"><button className="btn btn-small btn-quiet" onClick={() => void loadState(businessId)} disabled={loading || busy}><RefreshCw />Refresh state</button><button className="btn btn-small btn-quiet" onClick={() => openModal("reset")} disabled={busy}><RotateCcw />Reset demo</button></div>
       </div>
     </main>
 
     {modal && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setModal(null); }}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <div className="dialog-head"><div>
-          <h2 id="dialog-title">{modal === "add" ? "Add a stock batch" : modal === "approve" ? "Approve recommendation" : modal === "reject" ? "Reject recommendation" : modal === "complete" ? "Report task outcome" : "Reset demo data"}</h2>
-          <p className="dialog-intro">{modal === "add" ? "Add synthetic inventory for this demo. This does not connect to a live stock system." : modal === "approve" ? "Approval creates a staff task. Assign it to a simulated team member." : modal === "reject" ? "Record an owner decision for this simulated recommendation." : modal === "complete" ? "Record what staff report doing. Completing a task does not adjust stock quantity." : "Restore the initial synthetic products, recommendations, tasks and events."}</p>
+          <h2 id="dialog-title">{modal === "add" ? "Add a stock batch" : modal === "edit" ? "Edit inventory record" : modal === "approve" ? "Approve recommendation" : modal === "reject" ? "Reject recommendation" : modal === "complete" ? "Report task outcome" : "Reset demo data"}</h2>
+          <p className="dialog-intro">{modal === "add" ? `Add synthetic inventory to ${response?.business.name ?? "this demo shop"}.` : modal === "edit" ? "Update this product and batch in the selected demo shop. Related expiry risks are recalculated." : modal === "approve" ? "Approval creates a staff task. Assign it to a simulated team member." : modal === "reject" ? "Record an owner decision for this simulated recommendation." : modal === "complete" ? "Record what staff report doing. Completing a task does not adjust stock quantity." : `Restore the initial synthetic data for ${response?.business.name ?? "this demo shop"} only.`}</p>
         </div><button className="icon-btn" aria-label="Close dialog" onClick={() => setModal(null)} disabled={busy}><X /></button></div>
 
-        {modal === "add" && <form onSubmit={submitInventory}>
+        {(modal === "add" || modal === "edit") && <form onSubmit={submitInventory}>
           <div className="form-grid">
-            <div className="field"><label htmlFor="productName">Product name</label><input id="productName" name="productName" required placeholder="e.g. Fresh milk" /></div>
-            <div className="field"><label htmlFor="sku">SKU</label><input id="sku" name="sku" required placeholder="e.g. MILK" /></div>
-            <div className="field"><label htmlFor="category">Category</label><input id="category" name="category" required placeholder="Dairy" /></div>
-            <div className="field"><label htmlFor="unit">Unit</label><input id="unit" name="unit" required placeholder="bottles" /></div>
-            <div className="field"><label htmlFor="batchId">Batch ID</label><input id="batchId" name="batchId" required placeholder="e.g. MILK-003" /></div>
-            <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" required type="number" min="1" step="1" inputMode="numeric" placeholder="24" /></div>
-            <div className="field full"><label htmlFor="expiryDate">Expiry date</label><input id="expiryDate" name="expiryDate" required type="date" /></div>
+            <div className="field"><label htmlFor="productName">Product name</label><input id="productName" name="productName" required defaultValue={selectedInventory?.product.name} placeholder="e.g. Fresh milk" /></div>
+            <div className="field"><label htmlFor="sku">SKU</label><input id="sku" name="sku" required defaultValue={selectedInventory?.product.sku} placeholder="e.g. MILK" /></div>
+            <div className="field"><label htmlFor="category">Category</label><input id="category" name="category" required defaultValue={selectedInventory?.product.category} placeholder="Dairy" /></div>
+            <div className="field"><label htmlFor="unit">Unit</label><input id="unit" name="unit" required defaultValue={selectedInventory?.product.unit} placeholder="bottles" /></div>
+            <div className="field"><label htmlFor="batchId">Batch ID</label><input id="batchId" name="batchId" required defaultValue={selectedInventory?.batch.id} placeholder="e.g. MILK-003" /></div>
+            <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" required type="number" min="1" max="100000" step="1" inputMode="numeric" defaultValue={selectedInventory?.batch.quantity} placeholder="24" /></div>
+            <div className="field full"><label htmlFor="expiryDate">Expiry date</label><input id="expiryDate" name="expiryDate" required type="date" defaultValue={selectedInventory?.batch.expiryDate} /></div>
           </div>
           {formError && <div className="form-error" role="alert">{formError}</div>}
-          <div className="dialog-actions"><button type="button" className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle /> : <Plus />}Add batch</button></div>
+          <div className="dialog-actions"><button type="button" className="btn" onClick={() => setModal(null)} disabled={busy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle /> : modal === "edit" ? <Check /> : <Plus />}{modal === "edit" ? "Save changes" : "Add batch"}</button></div>
         </form>}
         {modal === "approve" && <div>
           {selectedRecommendation && <div className="explain-box"><div className="explain-label">Recommendation</div><div className="explain-text"><strong>{selectedRecommendation.productName}</strong> · {selectedRecommendation.quantity} {selectedRecommendation.unit} · expires {dateLabel(selectedRecommendation.expiryDate)}<br />{selectedRecommendation.suggestedAction}</div></div>}

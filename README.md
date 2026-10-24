@@ -58,7 +58,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 | ------------- | ---------------------------- |
 | Frontend      | Next.js App Router, React, TypeScript |
 | Backend       | Next.js route handlers |
-| Database      | Supabase PostgreSQL when configured; local JSON demo otherwise |
+| Database      | Supabase PostgreSQL when configured; per-shop local JSON demo otherwise |
 | AI / Compute  | Deterministic rules; no AI or RunPod dependency |
 | Hosting / Dev | Replit |
 
@@ -69,7 +69,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 ```
 .
 ├── app/                     # Next.js operations UI and API routes
-├── src/lib/                 # Expiry rules, shared types, server-side storage
+├── src/lib/                 # Business registry, expiry rules, types, server-side storage
 ├── supabase/
 │   └── schema.sql           # Supabase table setup
 ├── docs/                    # Screenshots, diagrams
@@ -97,8 +97,8 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 ### Architecture
 
 ```
-Browser ──► Next.js UI and API ──► Supabase PostgreSQL (if configured)
-                         └──────► Local demo JSON file (otherwise)
+Browser ──► Next.js UI and API ──► Supabase PostgreSQL (one state row per demo shop)
+                         └──────► Local JSON file per demo shop (otherwise)
 ```
 
 ---
@@ -109,7 +109,7 @@ Browser ──► Next.js UI and API ──► Supabase PostgreSQL (if configure
 
 1. Import this repository into Replit.
 2. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
-3. With no Supabase variables, the app labels itself **Local demo** and stores state in `.data/freshflow-demo.json` on the running workspace.
+3. With no Supabase variables, the app labels itself **Local demo** and stores each demo shop separately under `.data/` on the running workspace.
 4. To use Supabase persistence, add both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in Replit Secrets after applying `supabase/schema.sql`.
 
 ### Option 2 — Run Locally
@@ -134,9 +134,11 @@ Open `http://localhost:5000`.
 
 ### Persistence and database setup
 
-- **Local demo mode:** with both Supabase variables absent, FreshFlow writes its synthetic state to `.data/freshflow-demo.json`. This is local to the running workspace and is not a hosted database or multi-user store.
+- **Local demo mode:** with both Supabase variables absent, FreshFlow writes each shop's synthetic state to its own JSON file in `.data/` (`freshflow-demo.json` and `kedai-runcit-demo.json`). The original FreshFlow demo file remains the default shop's file. These files are local to the running workspace and are not a hosted database or multi-user store.
 - **Supabase mode:** set both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The service-role key is read only by server-side code and must never use a `NEXT_PUBLIC_` prefix. If either variable is only partially configured, or the table is unavailable, FreshFlow reports an error instead of silently falling back.
-- Create the `freshflow_state` table by running [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor. The app stores the single demo state as JSONB in the row with ID `demo`.
+- Apply [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor. It creates `freshflow_business_state` with one JSONB state row per business ID and copies the prior `freshflow_state` row (`id = 'demo'`) into `freshflow-demo` only if that destination row does not already exist. The legacy table is retained; the migration is repeatable and does not overwrite the new table's existing rows.
+- The demo shop selector switches between `freshflow-demo` and `kedai-runcit-demo`, whose inventory and workflow states are kept separately. This is simulated workspace switching, not authentication or secure tenant authorization. The service-role key is server-only; do not expose this demo API to public sensitive data.
+- Choosing **Reset demo** resets only the currently selected synthetic shop. The server refuses the reset if it detects any non-synthetic records in that shop.
 - Supabase configuration was not available for this local build, so live database persistence was not verified.
 
 ### Tests and build

@@ -3,6 +3,12 @@ export type RecommendationStatus = "pending" | "approved" | "rejected";
 export type TaskStatus = "open" | "completed";
 export type RiskType = "expired" | "approaching";
 
+export interface BusinessWorkspace {
+  id: string;
+  name: string;
+  simulated: true;
+}
+
 export interface InventoryBatch {
   id: string;
   productId: string;
@@ -65,11 +71,14 @@ export interface ActivityEvent {
     | "task_assigned"
     | "task_completed"
     | "inventory_added"
+    | "inventory_edited"
     | "settings_changed"
     | "demo_reset";
   title: string;
   description: string;
   occurredAt: string;
+  productId?: string;
+  batchId?: string;
   simulated: true;
 }
 
@@ -99,6 +108,20 @@ export type InventoryAction =
         expiryDate: string;
       };
     }
+  | {
+      type: "edit_inventory";
+      payload: {
+        productId: string;
+        originalBatchId: string;
+        batchId: string;
+        productName: string;
+        sku: string;
+        category: string;
+        unit: string;
+        quantity: number;
+        expiryDate: string;
+      };
+    }
   | { type: "set_threshold"; payload: { thresholdDays: number } }
   | {
       type: "approve";
@@ -117,4 +140,7 @@ export type InventoryAction =
 export interface StateResponse {
   state: AppState;
   persistenceMode: PersistenceMode;
+  businessId: string;
+  business: BusinessWorkspace;
+  businesses: BusinessWorkspace[];
 }

@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import {
+  DEFAULT_BUSINESS_ID,
+  getBusinessWorkspace,
+} from "@/src/lib/businesses";
 import { dispatchAction } from "@/src/lib/store";
 import type { InventoryAction } from "@/src/lib/types";
 
@@ -60,6 +64,34 @@ function parseAction(input: unknown): InventoryAction {
           category: text(payload.category, "Category", 60),
           unit: text(payload.unit, "Unit", 30),
           batchId: text(payload.batchId, "Batch ID", 60),
+          quantity,
+          expiryDate: payload.expiryDate,
+        },
+      };
+    }
+    case "edit_inventory": {
+      const quantity = payload.quantity;
+      if (
+        typeof quantity !== "number" ||
+        !Number.isInteger(quantity) ||
+        quantity < 1 ||
+        quantity > 100_000
+      ) {
+        throw new Error("Quantity must be a whole number from 1 to 100,000.");
+      }
+      if (!isValidDate(payload.expiryDate)) {
+        throw new Error("Enter a valid expiry date.");
+      }
+      return {
+        type: "edit_inventory",
+        payload: {
+          productId: text(payload.productId, "Product", 100),
+          originalBatchId: text(payload.originalBatchId, "Original batch ID", 60),
+          batchId: text(payload.batchId, "Batch ID", 60),
+          productName: text(payload.productName, "Product name"),
+          sku: text(payload.sku, "SKU", 40),
+          category: text(payload.category, "Category", 60),
+          unit: text(payload.unit, "Unit", 30),
           quantity,
           expiryDate: payload.expiryDate,
         },
@@ -127,8 +159,20 @@ export async function POST(request: Request) {
     } catch {
       return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
     }
-    const action = parseAction(body);
-    return NextResponse.json(await dispatchAction(action), {
+    const actionEnvelope =
+      isRecord(body) && "action" in body ? body.action : body;
+    const businessId =
+      isRecord(body) && typeof body.businessId === "string"
+        ? body.businessId
+        : DEFAULT_BUSINESS_ID;
+    if (!getBusinessWorkspace(businessId)) {
+      return NextResponse.json(
+        { error: "That demo shop is not available." },
+        { status: 400 },
+      );
+    }
+    const action = parseAction(actionEnvelope);
+    return NextResponse.json(await dispatchAction(action, businessId), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
