@@ -446,7 +446,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
           <p className="page-meta">
             <span><CalendarDays aria-hidden="true" />Reference date <strong>{dateLabel(referenceDate)}</strong></span>
             <span>Expiry threshold <strong>{thresholdDays} days</strong></span>
-            <span title="Business access is verified independently. Role preview can only narrow your real permissions."><Info aria-hidden="true" />Verified business access · testing preview</span>
+            <span title="Anyone with this link can access the persistent demo data and choose either Owner or Staff."><Info aria-hidden="true" />Public hackathon preview · not secure</span>
           </p>
         </div>
         <div className="page-actions">
@@ -577,14 +577,13 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
               <h3 className="block-title"><Info aria-hidden="true" />About this workspace</h3>
               <ul className="facts">
                 <li><strong>Operational data.</strong> Inventory, receipts, movements, and audit history use persisted records. Unknown history and costs are not invented.</li>
-                <li><strong>Role preview.</strong> This testing control can only narrow your verified membership permissions. It is not sign-in.</li>
+                <li><strong>Public testing profiles.</strong> Anyone with this link can select Owner or Staff and access this persistent database. Do not store private or sensitive production information here.</li>
                 <li><strong>Reference date.</strong> Expiry uses today&apos;s calendar date in {state.settings.timeZone ?? "Asia/Kuala_Lumpur"}.</li>
                 <li><strong>Storage.</strong> {storageLabel}. There is no live POS or stock-system sync; completing a task never changes quantities.</li>
               </ul>
             </div>
           </div>
 
-          <TeamAccessPanel />
           <LegacyCleanupReview onChanged={() => void loadState(businessId)} />
           <div className="alert"><Info aria-hidden="true" />Dataset restoration is disabled for operational records. Legacy cleanup requires a reviewed backup and explicit migration confirmation.</div>
         </Section>
@@ -604,10 +603,10 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         </div>
         <div className="top-actions">
           <div className="control" role="group" aria-labelledby="role-view-label">
-            <span className="control-label" id="role-view-label" title="Testing only: preview permissions cannot exceed your verified business membership.">Testing preview · not sign-in</span>
+            <span className="control-label" id="role-view-label" title="Public testing profiles: anyone with the link can select Owner or Staff. Not security or production access control.">PUBLIC TESTING · NOT SECURITY</span>
             <div className="segmented">
               {(["owner", "staff"] as const).map((value) => (
-                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked || (value==="owner" && response?.actualRole!=="owner")}>
+                <button key={value} type="button" aria-pressed={role === value} className={role === value ? "selected" : ""} onClick={() => void changePreviewRole(value)} disabled={controlsLocked}>
                   {value === "owner" ? "Owner" : "Staff"}
                 </button>
               ))}

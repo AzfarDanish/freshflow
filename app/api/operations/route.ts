@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { requireIdentity, requireOwner, errorStatus, rejectOtherBusiness } from "@/src/lib/identity";
+import { getPreviewIdentity, requireOwner, errorStatus, rejectOtherBusiness } from "@/src/lib/identity";
 import { applyOperationalAction, operationalReport, businessDate, recordObject } from "@/src/lib/operations";
 import { getCurrentState, withBusinessState } from "@/src/lib/store";
 import { reconcileRisks } from "@/src/lib/expiry";
 export const dynamic="force-dynamic";
 export async function GET(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const url=new URL(request.url),today=businessDate(new Date().toISOString());
     const {state}=await getCurrentState(identity.businessId);
     return NextResponse.json(operationalReport(state,url.searchParams.get("from")??today,url.searchParams.get("to")??today),{headers:{"Cache-Control":"private, no-store"}});
@@ -14,7 +14,7 @@ export async function GET(request:Request) {
 }
 export async function POST(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const body=recordObject(await request.json());rejectOtherBusiness(body.businessId,identity);
     const value=await withBusinessState(identity.businessId,async state=>{
       applyOperationalAction(state,body,identity);reconcileRisks(state);

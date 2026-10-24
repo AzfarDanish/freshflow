@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireIdentity, requireOwner, rejectOtherBusiness, errorStatus } from "@/src/lib/identity";
+import { getPreviewIdentity, requireOwner, rejectOtherBusiness, errorStatus } from "@/src/lib/identity";
 import { recordObject } from "@/src/lib/operations";
 import { applyReceivingAction } from "@/src/lib/receiving";
 import { withBusinessState, stateResponse } from "@/src/lib/store";
@@ -8,7 +8,7 @@ import { reconcileRisks } from "@/src/lib/expiry";
 export const runtime="nodejs";
 export async function POST(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const body=recordObject(await request.json());rejectOtherBusiness(body.businessId,identity);
     const payload=recordObject(body.payload);
     const value=body.type==="retry_processing"

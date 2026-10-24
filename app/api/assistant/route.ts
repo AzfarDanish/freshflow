@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { requireIdentity, errorStatus, rejectOtherBusiness, IdentityError } from "@/src/lib/identity";
+import { getPreviewIdentity, errorStatus, rejectOtherBusiness, IdentityError } from "@/src/lib/identity";
 import { recordObject } from "@/src/lib/operations";
 import { inventoryQuestion } from "@/src/lib/assistant";
 const limits=new Map<string,{at:number;count:number}>();
 export async function POST(request:Request) {
   try {
-    const identity=await requireIdentity(request),body=recordObject(await request.json());
+    const identity=await getPreviewIdentity(request),body=recordObject(await request.json());
     rejectOtherBusiness(body.businessId,identity);
     const key=identity.businessId+":"+identity.userId;
     if(limits.size>5000)for(const [k,v]of limits)if(Date.now()-v.at>60000)limits.delete(k);

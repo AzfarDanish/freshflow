@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { requireIdentity, requireOwner, rejectOtherBusiness, errorStatus, IdentityError } from "@/src/lib/identity";
+import { getPreviewIdentity, requireOwner, rejectOtherBusiness, errorStatus, IdentityError } from "@/src/lib/identity";
 import { createInvoiceIntake, getCurrentState } from "@/src/lib/store";
 import { runPersistedProcessing } from "@/src/lib/invoice-processing";
 import type { InvoiceIntake } from "@/src/lib/types";
@@ -32,7 +32,7 @@ async function boundedForm(request:Request) {
 }
 export async function POST(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const form=await boundedForm(request);
     rejectOtherBusiness(form.get("businessId")??undefined,identity);
     const file=form.get("file");

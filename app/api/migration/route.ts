@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { requireIdentity, requireOwner, errorStatus } from "@/src/lib/identity";
+import { getPreviewIdentity, requireOwner, errorStatus } from "@/src/lib/identity";
 import { getPool } from "@/src/lib/db";
 import { legacyCleanupReport, applyLegacyCleanup, stateDigest } from "@/src/lib/legacy-cleanup";
 import { recordObject, addOperationalActivity } from "@/src/lib/operations";
@@ -8,14 +8,14 @@ import { withBusinessState, stateResponse } from "@/src/lib/store";
 import type { AppState } from "@/src/lib/types";
 export async function GET(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const result=await getPool().query<{state:AppState}>("SELECT state FROM freshflow_business_state WHERE business_id=$1",[identity.businessId]);
     return NextResponse.json({report:result.rows[0]?legacyCleanupReport(result.rows[0].state):null},{headers:{"Cache-Control":"private, no-store"}});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Could not inspect legacy records."},{status:errorStatus(error)});}
 }
 export async function POST(request:Request) {
   try {
-    const identity=await requireIdentity(request);requireOwner(identity);
+    const identity=await getPreviewIdentity(request);requireOwner(identity);
     const body=recordObject(await request.json());
     if(body.confirmed!==true||typeof body.digest!=="string")throw new Error("Review the migration report and explicitly confirm its exact digest.");
     const result=await withBusinessState(identity.businessId,async(_,client,mode)=>{

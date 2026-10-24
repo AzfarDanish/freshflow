@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as database from "../src/lib/db";
 import { createBusinessSeedState, reconcileRisks } from "../src/lib/expiry";
 import { applyOperationalAction, operationalReport } from "../src/lib/operations";
 import { applyReceivingAction } from "../src/lib/receiving";
 import { answerFromFacts } from "../src/lib/assistant";
-import { cappedRole, requireIdentity } from "../src/lib/identity";
+import { getPreviewIdentity } from "../src/lib/identity";
+import { PREVIEW_ROLE_COOKIE, signPreviewRoleCookie } from "../src/lib/role-session";
 import { legacyCleanupReport, applyLegacyCleanup } from "../src/lib/legacy-cleanup";
 import { createSeedState } from "./fixtures/seed-state";
 import type { AppState } from "../src/lib/types";
 import type { BusinessIdentity } from "../src/lib/operational-types";
 vi.mock("server-only",()=>({}));
-const authMocks=vi.hoisted(()=>({auth:vi.fn(),currentUser:vi.fn()}));
-vi.mock("@clerk/nextjs/server",()=>({...authMocks,clerkClient:vi.fn()}));
 vi.mock("next/headers",()=>({cookies:async()=>({get:()=>undefined})}));
 const owner:BusinessIdentity={userId:"verified-owner",businessId:"freshflow-demo",actualRole:"owner",role:"owner"};
 const staff:BusinessIdentity={...owner,userId:"verified-staff",actualRole:"staff",role:"staff"};
@@ -24,8 +22,8 @@ function state():AppState {
 }
 function movement(overrides:Record<string,unknown>={}) {return {type:"record_movement",payload:{requestId:"request-sale",kind:"sale",productId:"p",batchId:"B",quantity:2,unitPriceMinor:500,unitCostMinor:250,reason:"Recorded till sale",occurredAt:now,...overrides}};}
 function receipt(s:AppState,amount=3,requestId="receipt-request") {return {type:"receive_invoice",payload:{intakeId:"i",requestId,confirmed:true,lines:[{proposalId:"l",quantity:amount,batchId:"DELIVERY",expiryDate:"2026-10-27",matchMode:"existing",fields:{...s.invoiceIntakes[0].proposals[0]}}]}};}
-beforeEach(()=>{vi.setSystemTime(new Date(now));authMocks.auth.mockResolvedValue({userId:null});});
-afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();authMocks.currentUser.mockClear();});
+beforeEach(()=>{vi.setSystemTime(new Date(now));});
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();});
 describe("real operational foundation",()=>{
   it("starts unknown businesses empty, never recreates a fixture",()=>expect(createBusinessSeedState("new-business").products).toEqual([]));
   it("persists sale deltas, retries idempotently and rejects conflicting request reuse",()=>{
@@ -86,22 +84,17 @@ describe("invoice physical receiving",()=>{
   });
 });
 describe("read-only assistant and migration safety",()=>{
-  it("caps role previews and rejects unauthenticated identity",async()=>{
-    expect(cappedRole("staff","owner")).toBe("staff");expect(cappedRole("owner","staff")).toBe("staff");
-    await expect(requireIdentity()).rejects.toMatchObject({status:401});
+  it("lets anyone select the signed Owner or Staff testing profile without authentication",async()=>{
+    const profile=(role:"owner"|"staff")=>getPreviewIdentity(new Request("https://freshflow.test/api/state",{headers:{cookie:`${PREVIEW_ROLE_COOKIE}=${signPreviewRoleCookie(role)}`}}));
+    expect((await getPreviewIdentity()).role).toBe("staff");
+    expect(await profile("owner")).resolves.toMatchObject({role:"owner",userId:"testing-preview-owner"});
+    expect(await profile("staff")).resolves.toMatchObject({role:"staff",userId:"testing-preview-staff"});
+    expect(getPreviewIdentity(new Request("https://freshflow.test/api/state?businessId=unrelated"))).rejects.toMatchObject({status:403});
   });
-  it("never bootstraps an inactive membership back into Owner access",async()=>{
-    authMocks.auth.mockResolvedValue({userId:"revoked-owner"});
-    vi.stubEnv("FRESHFLOW_BOOTSTRAP_OWNER_EMAIL","owner@example.test");
-    const query=vi.fn().mockResolvedValue({rows:[{role:"owner",active:false}]});
-    vi.spyOn(database,"getPool").mockReturnValue({query} as never);
-    await expect(requireIdentity()).rejects.toMatchObject({status:403});
-    expect(query).toHaveBeenCalledOnce();expect(authMocks.currentUser).not.toHaveBeenCalled();
-  });
-  it("rejects cross-business request scopes and cross-site mutations",async()=>{
-    authMocks.auth.mockResolvedValue({userId:"verified-staff"});
-    await expect(requireIdentity(new Request("https://freshflow.test/api/state?businessId=unrelated"))).rejects.toMatchObject({status:403});
-    await expect(requireIdentity(new Request("https://freshflow.test/api/action",{method:"POST",headers:{origin:"https://attacker.test"}}))).rejects.toMatchObject({status:403});
+  it("rejects cross-site mutations and limits fake profile roles to the existing matrix",async()=>{
+    await expect(getPreviewIdentity(new Request("https://freshflow.test/api/action",{method:"POST",headers:{origin:"https://attacker.test"}}))).rejects.toMatchObject({status:403});
+    const inventory=state();
+    expect(()=>applyOperationalAction(inventory,movement(),staff)).toThrow();
   });
   it("grounds answers in actual batch evidence without mutating state",()=>{
     const s=state(),before=structuredClone(s),answer=answerFromFacts(s,{tool:"stock",search:"APP"},staff);
@@ -115,12 +108,10 @@ describe("read-only assistant and migration safety",()=>{
     const cleaned=applyLegacyCleanup(s,report.digest);expect(cleaned.products.map(p=>p.id)).toEqual(["p"]);
     s.products[0].batches[0].quantity=7;expect(legacyCleanupReport(s).removeBatches).toHaveLength(3);
   });
-  it("rejects unsigned calls on every operational API even with forged Owner input",async()=>{
-    const routes=await Promise.all([import("../app/api/state/route"),import("../app/api/action/route"),import("../app/api/role/route"),import("../app/api/operations/route"),import("../app/api/receiving/route"),import("../app/api/invoices/route"),import("../app/api/assistant/route"),import("../app/api/members/route"),import("../app/api/migration/route")]);
-    for(const route of routes) {
-      const handler="POST"in route?route.POST:route.GET;
-      const response=await handler(new Request("https://freshflow.test/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:"owner",confirmed:true,businessId:"another-business"})}));
-      expect(response.status).toBe(401);
-    }
+  it("lets an unsigned visitor persist a selected testing profile",async()=>{
+    const {POST}=await import("../app/api/role/route");
+    const response=await POST(new Request("https://freshflow.test/api/role",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:"owner"})}));
+    expect(response.status).toBe(200);
+    expect(response.cookies.get(PREVIEW_ROLE_COOKIE)?.value).toBe(signPreviewRoleCookie("owner"));
   });
 });

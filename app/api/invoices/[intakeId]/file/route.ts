@@ -3,7 +3,7 @@ import { DEFAULT_BUSINESS_ID, getBusinessWorkspace } from "@/src/lib/businesses"
 import { getInvoiceDocument, getCurrentState } from "@/src/lib/store";
 import { AccessDeniedError, requireActionPermission } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
-import { requireIdentity, errorStatus } from "@/src/lib/identity";
+import { getPreviewIdentity, errorStatus } from "@/src/lib/identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function GET(
   { params }: { params: Promise<{ intakeId: string }> },
 ) {
   try {
-    const identity = await requireIdentity(request);
+    const identity = await getPreviewIdentity(request);
     const role = identity.role;
     requireActionPermission(role, "view_invoice_file");
     const { intakeId } = await params;

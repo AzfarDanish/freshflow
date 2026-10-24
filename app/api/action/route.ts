@@ -6,7 +6,7 @@ import {
 import { dispatchAction } from "@/src/lib/store";
 import { AccessDeniedError, filterStateForRole, requireActionPermission } from "@/src/lib/access-control";
 import { roleFromRequest } from "@/src/lib/role-session";
-import { requireIdentity, rejectOtherBusiness, errorStatus } from "@/src/lib/identity";
+import { getPreviewIdentity, rejectOtherBusiness, errorStatus } from "@/src/lib/identity";
 import {
   TASK_OUTCOME_TYPES,
   TASK_PROGRESS_TYPES,
@@ -289,7 +289,7 @@ function parseAction(input: unknown, role: "owner" | "staff"): InventoryAction {
 
 export async function POST(request: Request) {
   try {
-    const identity = await requireIdentity(request);
+    const identity = await getPreviewIdentity(request);
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > 16_384) {
       return NextResponse.json({ error: "Request is too large." }, { status: 413 });

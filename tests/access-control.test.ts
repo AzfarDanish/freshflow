@@ -14,8 +14,7 @@ import {
 vi.mock("server-only", () => ({}));
 vi.mock("../src/lib/identity",async(importOriginal)=>{
   const actual=await importOriginal<typeof import("../src/lib/identity")>();
-  const session=await import("../src/lib/role-session");
-  return {...actual,requireIdentity:async(request?:Request)=>({userId:"verified-owner",businessId:"freshflow-demo",actualRole:"owner",role:request?.headers.get("cookie")?session.roleFromRequest(request):"owner"})};
+  return {...actual};
 });
 
 let directory = "";

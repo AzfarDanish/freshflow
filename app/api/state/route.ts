@@ -1,20 +1,15 @@
 import { NextResponse } from "next/server";
-import {
-  DEFAULT_BUSINESS_ID,
-  getBusinessWorkspace,
-} from "@/src/lib/businesses";
 import { getCurrentState } from "@/src/lib/store";
 import { filterStateForRole } from "@/src/lib/access-control";
-import { roleFromRequest } from "@/src/lib/role-session";
-import { requireIdentity, errorStatus } from "@/src/lib/identity";
+import { getPreviewIdentity, errorStatus } from "@/src/lib/identity";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const identity = await requireIdentity(request);
+    const identity = await getPreviewIdentity(request);
     const result = filterStateForRole(await getCurrentState(identity.businessId), identity.role);
-    return NextResponse.json({ ...result, actualRole: identity.actualRole }, {
+    return NextResponse.json(result, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

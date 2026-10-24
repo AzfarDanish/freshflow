@@ -54,8 +54,8 @@ export function roleFromRequest(request: Request): Role {
 
 export async function requirePageRole(operation: OperationId): Promise<void> {
   try {
-    const { requireIdentity } = await import("./identity");
-    const identity = await requireIdentity();
+    const { getPreviewIdentity } = await import("./identity");
+    const identity = await getPreviewIdentity();
     if (!canAccessOperation(identity.role, operation)) redirect("/");
   } catch { redirect("/"); }
 }
