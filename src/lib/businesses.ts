@@ -8,11 +8,6 @@ export const BUSINESS_WORKSPACES: BusinessWorkspace[] = [
     name: "FreshFlow Demo Shop",
     simulated: true,
   },
-  {
-    id: "kedai-runcit-demo",
-    name: "Kedai Runcit Demo",
-    simulated: true,
-  },
 ];
 
 export function getBusinessWorkspace(

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import OperationsWorkspace from "./operations/OperationsWorkspace";
 
 export const metadata: Metadata = {
   title: "FreshFlow | Inventory operations",
@@ -11,7 +12,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><OperationsWorkspace>{children}</OperationsWorkspace></body>
     </html>
   );
 }

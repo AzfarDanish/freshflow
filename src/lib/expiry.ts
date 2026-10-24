@@ -124,6 +124,19 @@ export function reconcileRisks(
 ): boolean {
   let changed = false;
 
+  // Pending recommendations describe current stock; decided records are history.
+  const existingBatches = new Set(state.products.flatMap((product) =>
+    product.batches.map((batch) => `${product.id}:${batch.id}`),
+  ));
+  const retained = state.recommendations.filter((recommendation) =>
+    recommendation.status !== "pending" ||
+    existingBatches.has(`${recommendation.productId}:${recommendation.batchId}`),
+  );
+  if (retained.length !== state.recommendations.length) {
+    state.recommendations = retained;
+    changed = true;
+  }
+
   for (const product of state.products) {
     for (const batch of product.batches) {
       const risk = classifyRisk(
@@ -134,6 +147,7 @@ export function reconcileRisks(
       const pendingRecommendation = state.recommendations.find(
         (recommendation) =>
           recommendation.batchId === batch.id &&
+          recommendation.productId === product.id &&
           recommendation.status === "pending",
       );
       if (!risk) {
@@ -170,7 +184,8 @@ export function reconcileRisks(
           recommendation.batchId === batch.id &&
           recommendation.productId === product.id &&
           recommendation.quantity === batch.quantity &&
-          recommendation.expiryDate === batch.expiryDate,
+          recommendation.expiryDate === batch.expiryDate &&
+          recommendation.riskType === risk.riskType,
       );
       if (matchingHistoricalRecommendation) continue;
 
@@ -246,7 +261,7 @@ function explainRisk(
   thresholdDays: number,
 ): string {
   if (riskType === "expired") {
-    return `The batch contains ${quantity} ${unit} and expired on ${expiryDate}, before the demo date. Expired stock is listed separately from upcoming expiry.`;
+    return `The batch contains ${quantity} ${unit} and expired on ${expiryDate}, before the configured reference date. Expired stock is listed separately from upcoming expiry.`;
   }
   return `The batch contains ${quantity} ${unit} and expires on ${expiryDate}, in ${daysUntilExpiry} day${daysUntilExpiry === 1 ? "" : "s"}. The configured rule flags batches expiring within ${thresholdDays} days (including today).`;
 }

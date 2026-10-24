@@ -60,7 +60,7 @@
 
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: auto; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: var(--text-base); line-height: 1.5; -webkit-font-smoothing: antialiased; }
 body { min-height: 100dvh; }
 h1, h2, h3, p { margin: 0; }
@@ -377,4 +377,24 @@ h1 { font-size: var(--text-lg); font-weight: 650; letter-spacing: -.015em; line-
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* The shell stays in place; only the selected operation owns vertical scroll. */
+.shell { height: 100dvh; min-height: 0; overflow: hidden; }
+.sidebar { height: 100%; position: static; min-height: 0; }
+.main { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0; overflow: hidden; }
+.topbar { position: static; flex-shrink: 0; margin: 0; }
+.operation-page { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 28px 32px; }
+.operation-page h1:focus { outline: none; }
+.scroll-panel > .list, .scroll-panel > .timeline { max-height: none; overflow-y: visible; }
+.nav-item[aria-disabled="true"], .brand[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
+@media (max-width: 900px) {
+  .shell { display: flex; flex-direction: column; }
+  .sidebar { height: auto; flex-shrink: 0; }
+  .main { flex: 1; }
+  .operation-page { padding: 0 16px 24px; }
+}
+@media (max-width: 640px) {
+  .topbar-context { display: flex; }
+  .top-actions { width: auto; margin-left: auto; }
 }

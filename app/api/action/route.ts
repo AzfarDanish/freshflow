@@ -97,7 +97,12 @@ function parseAction(input: unknown): InventoryAction {
   if (!isRecord(input) || typeof input.type !== "string") {
     throw new Error("Send a valid FreshFlow action.");
   }
-  if (input.type === "reset") return { type: "reset" };
+  if (input.type === "reset") {
+    if (!isRecord(input.payload) || input.payload.confirmed !== true) {
+      throw new Error("Confirm the whole-demo reset before continuing.");
+    }
+    return { type: "reset", payload: { confirmed: true } };
+  }
   if (!isRecord(input.payload)) throw new Error("Action details are required.");
   const payload = input.payload;
 

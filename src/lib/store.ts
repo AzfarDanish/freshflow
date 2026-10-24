@@ -116,19 +116,19 @@ async function withBusinessState<T>(
     client: PoolClient | null,
     mode: PersistenceMode,
   ) => Promise<StateMutationResult<T>>,
+  readOnly = false,
 ): Promise<T> {
   const business = requireBusinessWorkspace(businessId);
   if (useTestLocalStorage()) {
     return exclusive(async () => {
-      const state =
-        (await readLocalState(business.id)) ??
-        createBusinessSeedState(business.id);
+      const stored = await readLocalState(business.id);
+      const state = stored ?? createBusinessSeedState(business.id);
       const updated = await operation(
         normalizeAppState(state),
         null,
         "test_local",
       );
-      await writeLocalState(business.id, updated.state);
+      if (!readOnly || !stored) await writeLocalState(business.id, updated.state);
       return updated.value;
     });
   }
@@ -157,12 +157,14 @@ async function withBusinessState<T>(
       client,
       "replit_postgres",
     );
-    await client.query(
-      `UPDATE freshflow_business_state
-       SET state = $1::jsonb, updated_at = now()
-       WHERE business_id = $2`,
-      [JSON.stringify(updated.state), business.id],
-    );
+    if (!readOnly) {
+      await client.query(
+        `UPDATE freshflow_business_state
+         SET state = $1::jsonb, updated_at = now()
+         WHERE business_id = $2`,
+        [JSON.stringify(updated.state), business.id],
+      );
+    }
     await client.query("COMMIT");
     return updated.value;
   } catch (error) {
@@ -178,12 +180,11 @@ export async function getCurrentState(
 ): Promise<StateResponse> {
   return withBusinessState(businessId, async (state, _client, mode) => {
     const business = requireBusinessWorkspace(businessId);
-    reconcileRisks(state);
     return {
       state,
       value: stateResponse(state, mode, business.id),
     };
-  });
+  }, true);
 }
 
 export async function createInvoiceIntake(
@@ -317,6 +318,12 @@ export async function dispatchAction(
         discardInvoiceProposal(state, action.payload, now);
         break;
       case "set_threshold":
+        if (!Number.isInteger(action.payload.thresholdDays) || action.payload.thresholdDays < 1 || action.payload.thresholdDays > 14) {
+          throw new Error("Expiry threshold must be a whole number from 1 to 14 days.");
+        }
+        if (state.settings.thresholdDays === action.payload.thresholdDays) {
+          throw new Error("The expiry threshold is already set to that value.");
+        }
         state.settings.thresholdDays = action.payload.thresholdDays;
         addActivity(state, {
           type: "settings_changed",
@@ -336,6 +343,9 @@ export async function dispatchAction(
         completeTask(state, action.payload, now);
         break;
       case "reset": {
+        if (action.payload?.confirmed !== true) {
+          throw new Error("Confirm the whole-demo reset before continuing.");
+        }
         if (!business.simulated || !containsOnlySyntheticRecords(state)) {
           throw new Error(
             "This shop contains non-demo records and cannot be reset as a demo.",
@@ -345,8 +355,8 @@ export async function dispatchAction(
         nextState = resetState;
         addActivity(resetState, {
           type: "demo_reset",
-          title: "Demo reset",
-          description: "The synthetic inventory and workflow were restored to their starting state.",
+          title: "Whole demo reset",
+          description: "All demo inventory, settings, recommendations, decisions, tasks and previous activity were restored to the initial dataset.",
           occurredAt: now,
         });
         break;
@@ -698,7 +708,7 @@ function addInventory(
   addActivity(state, {
     type: "inventory_added",
     title: "Inventory batch added",
-    description: `${product.name} · batch ${batchId} · ${input.quantity} ${product.unit} · expires ${input.expiryDate}. This entry is simulated demo data.`,
+    description: `${product.name} · batch ${batchId} · ${input.quantity} ${product.unit} · expires ${input.expiryDate}.`,
     occurredAt: now,
     productId: product.id,
     batchId,
@@ -761,17 +771,22 @@ function editInventory(
   batch.expiryDate = input.expiryDate;
 
   if (previous.batchId !== batch.id) {
-    state.recommendations = state.recommendations.filter(
-      (recommendation) =>
-        recommendation.batchId !== previous.batchId ||
-        recommendation.status !== "pending",
-    );
+    // Keep workflow links attached to the same stored batch when its label changes.
+    // Activity descriptions retain the original labels as an audit trail.
+    for (const recommendation of state.recommendations) {
+      if (recommendation.productId === product.id && recommendation.batchId === previous.batchId) {
+        recommendation.batchId = batch.id;
+      }
+    }
+    for (const task of state.tasks) {
+      if (task.productId === product.id && task.batchId === previous.batchId) task.batchId = batch.id;
+    }
   }
 
   addActivity(state, {
     type: "inventory_edited",
     title: "Inventory batch updated",
-    description: `${previous.productName} · ${previous.batchId} was updated to ${product.name} · ${batch.id}; quantity ${previous.quantity} → ${batch.quantity} ${product.unit}; expiry ${previous.expiryDate} → ${batch.expiryDate}. This is a simulated inventory change.`,
+    description: `${previous.productName} · ${previous.batchId} was updated to ${product.name} · ${batch.id}; quantity ${previous.quantity} ${previous.unit} → ${batch.quantity} ${product.unit}; expiry ${previous.expiryDate} → ${batch.expiryDate}.`,
     occurredAt: now,
     productId: product.id,
     batchId: batch.id,
@@ -826,7 +841,7 @@ function approveRecommendation(
     assignedTo,
     status: "open",
     createdAt: now,
-    simulated: true,
+    simulated: recommendation.simulated,
   };
   state.tasks.push(task);
   addActivity(state, {

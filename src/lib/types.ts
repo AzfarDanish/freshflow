@@ -250,7 +250,7 @@ export type InventoryAction =
         role?: "owner" | "staff";
       };
     }
-  | { type: "reset" };
+  | { type: "reset"; payload: { confirmed: true } };
 
 export interface StateResponse {
   state: AppState;

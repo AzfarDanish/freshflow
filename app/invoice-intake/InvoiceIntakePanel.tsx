@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import {
   AlertTriangle, Check, CheckCircle2, CircleHelp, FileText, FileUp,
   LoaderCircle, PackageCheck, ReceiptText, Save, X,
@@ -50,7 +50,8 @@ type ConfirmFields = ProposalFields & { matchMode: "existing" | "new" };
 
 export type InvoiceIntakePanelProps = {
   businessId: string;
-  businessName: string;
+  drafts: Record<string, InvoiceProposalDraft>;
+  setDrafts: Dispatch<SetStateAction<Record<string, InvoiceProposalDraft>>>;
   role: Role;
   products: Product[];
   intakes: Intake[];
@@ -61,7 +62,7 @@ export type InvoiceIntakePanelProps = {
   onDiscardProposal(intakeId: string, proposalId: string): Promise<void>;
 };
 
-type Draft = {
+export type InvoiceProposalDraft = {
   productName: string;
   sku: string;
   category: string;
@@ -73,7 +74,7 @@ type Draft = {
   matchedProductId: string;
 };
 
-function toDraft(proposal: Proposal): Draft {
+function toDraft(proposal: Proposal): InvoiceProposalDraft {
   return {
     productName: proposal.productName ?? "",
     sku: proposal.sku ?? "",
@@ -111,7 +112,8 @@ function dataClass(value: string | number | null | undefined) {
 
 export function InvoiceIntakePanel({
   businessId,
-  businessName,
+  drafts,
+  setDrafts,
   role,
   products,
   intakes,
@@ -123,7 +125,6 @@ export function InvoiceIntakePanel({
 }: InvoiceIntakePanelProps) {
   const inputId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [localBusy, setLocalBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
   const [validation, setValidation] = useState<Record<string, string>>({});
@@ -135,18 +136,26 @@ export function InvoiceIntakePanel({
   );
   const canEdit = role === "owner";
 
+  function clearDraft(key: string) {
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
   function getDraft(intakeId: string, proposal: Proposal) {
     const key = `${intakeId}:${proposal.id}`;
     return drafts[key] ?? toDraft(proposal);
   }
 
-  function patchDraft(intakeId: string, proposal: Proposal, patch: Partial<Draft>) {
+  function patchDraft(intakeId: string, proposal: Proposal, patch: Partial<InvoiceProposalDraft>) {
     const key = `${intakeId}:${proposal.id}`;
     setDrafts((current) => ({ ...current, [key]: { ...getDraft(intakeId, proposal), ...patch } }));
     setValidation((current) => ({ ...current, [key]: "" }));
   }
 
-  function fieldsFromDraft(draft: Draft): ProposalFields | null {
+  function fieldsFromDraft(draft: InvoiceProposalDraft): ProposalFields | null {
     const quantity = draft.quantity.trim() === "" ? null : Number(draft.quantity);
     if (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0 || quantity > 100_000)) return null;
     return {
@@ -161,7 +170,7 @@ export function InvoiceIntakePanel({
     };
   }
 
-  function validate(draft: Draft, proposalKey: string, isConfirm: boolean): ProposalFields | null {
+  function validate(draft: InvoiceProposalDraft, proposalKey: string, isConfirm: boolean): ProposalFields | null {
     const fields = fieldsFromDraft(draft);
     const missing: string[] = [];
     if (!fields) missing.push("Quantity must be a positive number.");
@@ -209,6 +218,7 @@ export function InvoiceIntakePanel({
     setFeedback("");
     try {
       await onSaveProposal(intakeId, proposal.id, fields);
+      clearDraft(key);
       setFeedback("Review edits saved. The proposal is still unverified.");
     } catch (error) {
       setValidation((current) => ({ ...current, [key]: error instanceof Error ? error.message : "Could not save these edits." }));
@@ -231,6 +241,7 @@ export function InvoiceIntakePanel({
         matchMode: draft.matchMode,
         matchedProductId: draft.matchMode === "existing" ? draft.matchedProductId : null,
       });
+      clearDraft(key);
       setFeedback("Line confirmed. A stock batch was added to inventory.");
     } catch (error) {
       setValidation((current) => ({ ...current, [key]: error instanceof Error ? error.message : "Could not confirm this proposal." }));
@@ -245,6 +256,7 @@ export function InvoiceIntakePanel({
     setFeedback("");
     try {
       await onDiscardProposal(intakeId, proposal.id);
+      clearDraft(key);
       setFeedback("Proposal discarded.");
     } catch (error) {
       setValidation((current) => ({ ...current, [key]: error instanceof Error ? error.message : "Could not discard this proposal." }));
@@ -262,7 +274,7 @@ export function InvoiceIntakePanel({
               <ReceiptText aria-hidden="true" />
               <h2 className={styles.title} id={`${inputId}-title`}>Invoice intake</h2>
             </div>
-            <p className={styles.subtitle}>Extract invoice lines into proposals for owner review · {businessName}</p>
+            <p className={styles.subtitle}>Extract invoice lines into proposals for owner review</p>
           </div>
           <span className={styles.headerCount}>{intakes.length} {intakes.length === 1 ? "file" : "files"}</span>
         </header>

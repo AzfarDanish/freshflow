@@ -55,7 +55,9 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 
 ### Interface
 
-A single operations page with a charcoal sidebar for jumping between sections: Overview (key counts), Decisions, Staff tasks, Activity, Invoice intake, Inventory (searchable and filterable by expiry status) and Settings & data. The top bar holds the shop selector and the simulated Owner/Staff role view. Settings & data contains the expiry threshold, a short statement of what is synthetic or simulated, and a separately confirmed sample-data reset. On narrow screens the sidebar becomes a horizontal bar and tables stack into labelled rows.
+Each operation has its own Next.js route: Overview (`/`, summary and expiry watchlist), Decisions (`/decisions`), Staff tasks (`/tasks`), Activity (`/activity`), Invoice intake (`/invoices`), Inventory (`/inventory`, searchable and filterable by expiry status), and Settings & data (`/settings`). Navigation replaces the page content, with browser back/forward and direct links supported. The charcoal sidebar and workspace header remain mounted, preserving loaded data, the simulated Owner/Staff view, inventory filters, expiry-rule drafts, and unsaved invoice edits during navigation. Only the selected operation scrolls; the sidebar and header stay visible. On narrow screens the sidebar becomes a horizontal bar and tables stack into labelled rows.
+
+FreshFlow Demo Shop is the sole available workspace. There is no shop selector or displayed shop name. Kedai Runcit Demo is no longer available through the application; its stored records are not deleted. Settings & data contains the expiry threshold, essential synthetic-data and simulated-role disclosures, and a separately confirmed sample-data reset.
 
 ### Tech Stack
 
@@ -149,7 +151,7 @@ Open `http://localhost:5000`.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
 - Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.
-- Shop and role switching remain demonstration conveniences, not authentication or secure tenant authorization. Do not expose this demo API to public sensitive data.
+- The Owner/Staff role view remains a demonstration convenience, not authentication or secure authorization. Do not expose this demo API to public sensitive data.
 - For existing state, run the import before the first app request creates seed rows: `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, run `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime. Supabase migration requires access to the legacy source and was not verified against a live Supabase database.
 - `supabase/schema.sql` is retained only as a legacy reference; FreshFlow no longer uses Supabase at runtime.
 

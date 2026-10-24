@@ -245,7 +245,7 @@ describe("inventory action state transitions", () => {
       added.state.recommendations.find((item) => item.batchId === "MILK-003")
         ?.riskType,
     ).toBe("approaching");
-    const reset = await dispatchAction({ type: "reset" });
+    const reset = await dispatchAction({ type: "reset", payload: { confirmed: true } });
     expect(reset.state.products.flatMap((product) => product.batches)).toHaveLength(
       createSeedState().products.flatMap((product) => product.batches).length,
     );
@@ -301,17 +301,13 @@ describe("inventory action state transitions", () => {
     expect(riskyAgain.state.activity.some((event) => event.batchId === "MILK-010" && event.type === "risk_detected")).toBe(true);
   });
 
-  it("keeps each demo shop in separate local storage and resets only the selected shop", async () => {
+  it("offers only FreshFlow and rejects the retired workspace without modifying current data", async () => {
     const { dispatchAction, getCurrentState } = await import("../src/lib/store");
     const primary = await getCurrentState();
-    const second = await getCurrentState("kedai-runcit-demo");
-    expect(second).toMatchObject({
-      businessId: "kedai-runcit-demo",
-      business: { name: "Kedai Runcit Demo" },
-    });
-    expect(second.state.products).toHaveLength(0);
+    expect(primary.businesses.map((business) => business.id)).toEqual(["freshflow-demo"]);
+    await expect(getCurrentState("kedai-runcit-demo")).rejects.toThrow("not available");
 
-    await dispatchAction(
+    await expect(dispatchAction(
       {
         type: "add_inventory",
         payload: {
@@ -325,12 +321,8 @@ describe("inventory action state transitions", () => {
         },
       },
       "kedai-runcit-demo",
-    );
-    expect((await getCurrentState("kedai-runcit-demo")).state.products).toHaveLength(1);
-    expect((await getCurrentState()).state.products).toHaveLength(primary.state.products.length);
-
-    await dispatchAction({ type: "reset" }, "kedai-runcit-demo");
-    expect((await getCurrentState("kedai-runcit-demo")).state.products).toHaveLength(0);
+    )).rejects.toThrow("not available");
+    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } }, "kedai-runcit-demo")).rejects.toThrow("not available");
     expect((await getCurrentState()).state.products).toHaveLength(primary.state.products.length);
   });
 
@@ -358,7 +350,7 @@ describe("inventory action state transitions", () => {
     await writeFile(process.env.FRESHFLOW_LOCAL_STATE_PATH!, JSON.stringify(existing));
 
     const { dispatchAction } = await import("../src/lib/store");
-    await expect(dispatchAction({ type: "reset" })).rejects.toThrow(
+    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow(
       "cannot be reset as a demo",
     );
     const persisted = JSON.parse(

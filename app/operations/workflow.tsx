@@ -79,7 +79,6 @@ export function RecommendationCard({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const isMilkScenario = recommendation.batchId === "MILK-001" && recommendation.expiryDate === "2026-10-25";
   return (
     <article className={`list-item recommendation ${recommendation.status === "pending" ? "is-pending" : ""}`}>
       <div className="item-top">
@@ -90,12 +89,6 @@ export function RecommendationCard({
         <StatusBadge tone={recommendationTone[recommendation.status]}>{recommendationLabel[recommendation.status]}</StatusBadge>
       </div>
       <dl className="detail-list">
-        {isMilkScenario && (
-          <div>
-            <dt>Why flagged</dt>
-            <dd>MILK-001 · 8 bottles · expires 25 Oct 2026. Reference date: 24 Oct 2026. It is {recommendation.daysUntilExpiry} day{recommendation.daysUntilExpiry === 1 ? "" : "s"} from expiry, inside the configured threshold.</dd>
-          </div>
-        )}
         <div><dt>Rule</dt><dd>{recommendation.explanation}</dd></div>
         <div><dt>Suggested action</dt><dd className="suggested"><ArrowRight aria-hidden="true" />{recommendation.suggestedAction}</dd></div>
       </dl>

@@ -181,7 +181,7 @@ describe("invoice review and confirmation", () => {
         role: "owner" as const,
       },
     };
-    await expect(dispatchAction(action, "kedai-runcit-demo")).rejects.toThrow("not found in this shop");
+    await expect(dispatchAction(action, "kedai-runcit-demo")).rejects.toThrow("not available");
     await expect(dispatchAction(action)).rejects.toThrow("SKU does not match");
   });
 
@@ -191,7 +191,7 @@ describe("invoice review and confirmation", () => {
     const document = await getInvoiceDocument("freshflow-demo", intake.id);
     expect(document?.fileName).toBe("supplier-invoice.csv");
     expect(document?.contents.toString()).toBe("private test invoice");
-    expect(await getInvoiceDocument("kedai-runcit-demo", intake.id)).toBeNull();
+    await expect(getInvoiceDocument("kedai-runcit-demo", intake.id)).rejects.toThrow("not available");
 
     const state = await getCurrentState("freshflow-demo");
     expect(state.state.invoiceIntakes).toHaveLength(1);
@@ -246,7 +246,7 @@ describe("invoice review and confirmation", () => {
         simulated: false,
       }),
     ]));
-    await expect(dispatchAction({ type: "reset" })).rejects.toThrow("non-demo records");
+    await expect(dispatchAction({ type: "reset", payload: { confirmed: true } })).rejects.toThrow("non-demo records");
   });
 
   it("adds a confirmed line to the explicitly selected existing product", async () => {
