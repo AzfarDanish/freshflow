@@ -28,7 +28,7 @@ import { Sidebar } from "@/app/operations/Sidebar";
 import { EmptyState, LoadingRows, Section, StatusBadge } from "@/app/operations/ui";
 import { ActivityList, ExpiryWatchTable, RecommendationCard, TaskRow } from "@/app/operations/workflow";
 import type { Role } from "@/app/operations/workflow";
-import { InventoryAssistant, InsightsPanel, TeamAccessPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
+import { InventoryAssistant, InsightsPanel, LegacyCleanupReview } from "@/app/production/ProductionPanels";
 import { InvoiceReceivingPanel } from "@/app/production/InvoiceReceivingPanel";
 
 type ModalKind = "add" | "edit" | "delete" | "approve" | "reject" | "progress" | "complete" | "reset" | null;
@@ -100,7 +100,7 @@ export default function OperationsWorkspace({ children }: { children: ReactNode 
         : body.state.settings.thresholdDays,
     );
     responseRef.current = body;
-    setResponse(previous=>({...body,actualRole:body.actualRole??previous?.actualRole}));
+    setResponse(body);
     setRole(body.role ?? "staff");
   }, []);
 

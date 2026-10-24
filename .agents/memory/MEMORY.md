@@ -3,4 +3,4 @@
 - [Redesign scope](redesign-scope.md) — preserve role-specific views and essential disclosures while reducing repetitive demo presentation.
 - [Direct browser verification](browser-cdp-checks.md) — activate manually created Chromium targets before waiting for preview hydration.
 - [Operational data](operational-data.md) — real records only; deliberate provenance-reviewed demo removal; deterministic invoice OCR and grounded read-only AI.
-- [Role preview scope](role-preview-access.md) — preserve the matrix; production identity/business membership must cap the retained testing switcher.
+- [Role preview access](role-preview-access.md) — this is a public demo; fake Owner/Staff profiles test the matrix and do not secure stored records.

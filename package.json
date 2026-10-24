@@ -12,8 +12,6 @@
     "db:import:supabase": "tsx scripts/import-existing-state.ts supabase"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.9.20",
-    "@clerk/shared": "^4.41.1",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",

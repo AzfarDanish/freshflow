@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { AlertTriangle, Bot, Database, RefreshCw, RotateCcw, ShieldAlert, Trash2, Users } from "lucide-react";
+import { AlertTriangle, Bot, Database, RefreshCw, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import type { Product, Role } from "@/src/lib/types";
 import type { AssistantResponse, OperationsResponse, StockMovement } from "@/src/lib/operational-types";
 import styles from "./ProductionPanels.module.css";
@@ -333,61 +333,6 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
       )}
     </section>
   );
-}
-
-type Member = { userId: string; role: Role; active: boolean };
-/** Owner-hosted membership management panel. No props; API authorization remains authoritative. */
-export function TeamAccessPanel() {
-  const [members, setMembers] = useState<Member[]>([]);
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const id = useId();
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const result = await apiJson<{ members: Member[] }>("/api/members");
-      setMembers(result.members);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load team access."); }
-    finally { setLoading(false); }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
-  async function add(event: FormEvent) {
-    event.preventDefault();
-    setBusy("invite"); setError(""); setSuccess("");
-    try {
-      await apiJson("/api/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email.trim(), role: "staff", active: true }) });
-      setEmail(""); setSuccess("Staff access granted to the verified account."); await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not grant access."); }
-    finally { setBusy(""); }
-  }
-  async function revoke(member: Member) {
-    if (member.role === "owner") return;
-    if (!window.confirm(`Revoke staff access for ${member.userId}?`)) return;
-    setBusy(member.userId); setError(""); setSuccess("");
-    try {
-      await apiJson("/api/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: member.userId, active: false }) });
-      setSuccess("Staff access revoked."); await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not revoke access."); }
-    finally { setBusy(""); }
-  }
-  return <section className={styles.panel} aria-labelledby={`${id}-title`}>
-    <header className={styles.head}><div><h2 className={styles.title} id={`${id}-title`}>Team access</h2><p className={styles.subtitle}>Grant verified accounts staff access, or revoke an existing staff account.</p></div><Users size={18} aria-hidden="true" /></header>
-    <div className={styles.body}>
-      <form onSubmit={(event) => void add(event)}>
-        <div className={styles.inline}><div className={styles.field} style={{ flex: "1 1 250px" }}><label htmlFor={`${id}-email`}>Verified account email</label><input id={`${id}-email`} type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="staff@example.com" required /></div><button className={`${styles.button} ${styles.primary}`} type="submit" disabled={!!busy}>{busy === "invite" ? "Saving…" : "Add staff"}</button></div>
-      </form>
-      <div className={styles.notice} style={{ marginTop: 12 }}>This workspace does not allow owner access to be granted from this panel.</div>
-      <h3 className={styles.subhead}>Accounts</h3>
-      {loading ? <div className={styles.loading} aria-busy="true"><div className={styles.skeleton} /><div className={styles.skeleton} /></div> : members.length ? members.map((member) => <div className={styles.member} key={member.userId}><span className={styles.memberId}>{member.userId}</span><span className={styles.memberRole}>{member.role} · {member.active ? "active" : "inactive"}</span>{member.role === "staff" && member.active && <button type="button" className={`${styles.button} ${styles.danger}`} onClick={() => void revoke(member)} disabled={!!busy}>{busy === member.userId ? "Revoking…" : "Revoke"}</button>}</div>) : <p className={styles.empty}>No member records were returned.</p>}
-      {error && <div className={styles.feedback} role="alert">{error} <button className={styles.button} type="button" onClick={() => void load()}>Retry</button></div>}
-      {success && <div className={`${styles.feedback} ${styles.success}`} role="status">{success}</div>}
-    </div>
-  </section>;
 }
 
 type LegacyCleanupReport = {

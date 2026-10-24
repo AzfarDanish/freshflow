@@ -87,9 +87,9 @@ describe("read-only assistant and migration safety",()=>{
   it("lets anyone select the signed Owner or Staff testing profile without authentication",async()=>{
     const profile=(role:"owner"|"staff")=>getPreviewIdentity(new Request("https://freshflow.test/api/state",{headers:{cookie:`${PREVIEW_ROLE_COOKIE}=${signPreviewRoleCookie(role)}`}}));
     expect((await getPreviewIdentity()).role).toBe("staff");
-    expect(await profile("owner")).resolves.toMatchObject({role:"owner",userId:"testing-preview-owner"});
-    expect(await profile("staff")).resolves.toMatchObject({role:"staff",userId:"testing-preview-staff"});
-    expect(getPreviewIdentity(new Request("https://freshflow.test/api/state?businessId=unrelated"))).rejects.toMatchObject({status:403});
+    await expect(profile("owner")).resolves.toMatchObject({role:"owner",userId:"testing-preview-owner"});
+    await expect(profile("staff")).resolves.toMatchObject({role:"staff",userId:"testing-preview-staff"});
+    await expect(getPreviewIdentity(new Request("https://freshflow.test/api/state?businessId=unrelated"))).rejects.toMatchObject({status:403});
   });
   it("rejects cross-site mutations and limits fake profile roles to the existing matrix",async()=>{
     await expect(getPreviewIdentity(new Request("https://freshflow.test/api/action",{method:"POST",headers:{origin:"https://attacker.test"}}))).rejects.toMatchObject({status:403});

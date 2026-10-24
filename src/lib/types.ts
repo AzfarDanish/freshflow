@@ -312,5 +312,4 @@ export interface StateResponse {
   role?: Role;
   recommendationCount?: number;
   pendingRecommendationCount?: number;
-  actualRole?: Role;
 }

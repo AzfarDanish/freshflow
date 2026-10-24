@@ -12,10 +12,6 @@ import {
 } from "../src/lib/role-session";
 
 vi.mock("server-only", () => ({}));
-vi.mock("../src/lib/identity",async(importOriginal)=>{
-  const actual=await importOriginal<typeof import("../src/lib/identity")>();
-  return {...actual};
-});
 
 let directory = "";
 let statePath = "";

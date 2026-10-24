@@ -1,19 +1,19 @@
 ---
 name: Role preview access scope
-description: The definitive Owner/Staff permissions, preview-only identity boundary, and safe deletion constraint.
+description: The public hackathon preview's fake Owner/Staff testing roles and their permission matrix.
 ---
 
-Keep the Owner/Staff switcher explicitly a testing/preview control, never production sign-in or identity verification. Production access must derive from verified identity and business membership; preview choices may narrow real privileges but must never elevate a Staff member or unauthenticated visitor.
+The user explicitly selected a public hackathon preview without login or authentication. Owner and Staff are fake testing profiles that any visitor can select; the role matrix is for exercising UI and operations, not for protecting data. Do not reintroduce authentication unless the user changes this project scope.
 
-**Why:** The production-transition brief explicitly requires retaining the testing switcher while preventing exposure of real business data through insecure role selection.
+**Why:** The user confirmed that the hackathon preview should open directly and permit public switching between Owner and Staff.
 
-**How to apply:** Keep truthful preview disclosures visible to both roles and enforce business-scoped permissions server-side independently of request payloads. Missing or invalid authenticated sessions must fail closed, not receive business data merely through a preview cookie; do not claim production readiness before real authentication and authorization are verified.
+**How to apply:** Keep a clear public-access warning visible in the app and documentation. Anyone with the URL can read and modify persistent FreshFlow records as Owner, so do not present this build as secure for production or encourage storing sensitive data. Keep operational validation and data integrity safeguards, but do not describe profile checks as identity security.
 
-The access matrix is definitive: Staff may view Overview, Inventory, Staff tasks, and Activity, and update task progress or complete tasks with outcomes. Only Owners may modify/delete inventory, view or decide recommendations, use invoice intake/receiving, manage sales/waste and financial insights, change settings, or manage membership. Both roles can update and complete staff tasks; do not reintroduce Staff-only completion or assignee-only restrictions. Production demo restoration is disabled, not a permission granted to Owners.
+The access matrix is definitive: Staff may view Overview, Inventory, Staff tasks, and Activity, and update task progress or complete tasks with outcomes. Only the Owner testing profile may modify/delete inventory, view or decide recommendations, use invoice intake/receiving, manage sales/waste and financial insights, or change settings. Both roles can update and complete staff tasks; do not reintroduce Staff-only completion or assignee-only restrictions.
 
-**Why:** The user explicitly grants both roles task progress and completion while denying Staff the other operations; the production-transition brief removes demo restoration and adds Owner-only operational and financial management.
+**Why:** The user explicitly grants both testing profiles task progress and completion while reserving other operations for the Owner profile.
 
-**How to apply:** Keep pages, navigation, read responses, mutation routes, and underlying service checks consistent with the matrix.
+**How to apply:** Keep pages, navigation, read responses, and mutation behavior consistent with this test matrix while preserving the public-access disclosure.
 
 Deleting inventory must not silently cancel open work. Block batch deletion while an open task references it; preserve historical decisions, completed reports, and activity when deletion is confirmed.
 
