@@ -8,7 +8,7 @@
 
 # FreshFlow
 
-> FreshFlow helps Malaysian micro and small grocers turn synthetic expiry-risk alerts into reviewed, assigned, and reported inventory actions.
+> FreshFlow helps Malaysian micro and small grocers turn expiry-risk alerts and supplier invoice lines into reviewed, assigned, and reported inventory actions.
 
 ---
 
@@ -51,6 +51,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 - **Expiry visibility** — Show expired stock separately from batches within a configurable expiry window.
 - **Human-reviewed actions** — Explain a recommendation and let the simulated owner approve or reject it.
 - **Accountable follow-through** — Assign work after approval, record a structured staff-reported outcome (with an explanation for “Other”), and show linked simulated events chronologically.
+- **Supplier invoice intake** — Upload PDF or CSV invoices, review extracted fields and issues, explicitly match or create a product, and add a batch only after owner confirmation.
 
 ### Tech Stack
 
@@ -58,7 +59,7 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 | ------------- | ---------------------------- |
 | Frontend      | Next.js App Router, React, TypeScript |
 | Backend       | Next.js route handlers |
-| Database      | Supabase PostgreSQL when configured; per-shop local JSON demo otherwise |
+| Database      | Replit-managed PostgreSQL; local JSON is test-only |
 | AI / Compute  | Deterministic rules; no AI or RunPod dependency |
 | Hosting / Dev | Replit |
 
@@ -69,9 +70,13 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 ```
 .
 ├── app/                     # Next.js operations UI and API routes
-├── src/lib/                 # Business registry, expiry rules, types, server-side storage
+├── src/lib/                 # Business registry, expiry, invoice extraction, database and types
+├── drizzle.config.ts        # Replit PostgreSQL schema configuration
+├── drizzle/                 # Generated PostgreSQL schema snapshots
+├── scripts/
+│   └── import-existing-state.ts # Non-destructive local/Supabase import utility
 ├── supabase/
-│   └── schema.sql           # Supabase table setup
+│   └── schema.sql           # Retained legacy Supabase schema
 ├── docs/                    # Screenshots, diagrams
 ├── runpod/
 │   └── handler.py           # Preserved Python starter; not used by FreshFlow
@@ -97,8 +102,9 @@ FreshFlow applies deterministic expiry-date rules, explains each flag, asks for 
 ### Architecture
 
 ```
-Browser ──► Next.js UI and API ──► Supabase PostgreSQL (one state row per demo shop)
-                         └──────► Local JSON file per demo shop (otherwise)
+Browser ──► Next.js UI and API ──► Replit PostgreSQL
+                                      ├── one JSON state row per demo shop
+                                      └── private invoice-file rows (bytea)
 ```
 
 ---
@@ -107,10 +113,10 @@ Browser ──► Next.js UI and API ──► Supabase PostgreSQL (one state ro
 
 ### Option 1 — Run on Replit (Recommended)
 
-1. Import this repository into Replit.
-2. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
-3. With no Supabase variables, the app labels itself **Local demo** and stores each demo shop separately under `.data/` on the running workspace.
-4. To use Supabase persistence, add both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in Replit Secrets after applying `supabase/schema.sql`.
+1. Import this repository into Replit and enable its managed PostgreSQL database.
+2. Run `npm run db:push` once to apply the Drizzle schema to the development database.
+3. Click **Run**. The `.replit` run command starts the Next.js development server on port 5000.
+4. After code merges, the configured post-merge setup installs packages and pushes the schema to the development database. Production schema changes must be applied to the production database before publishing.
 
 ### Option 2 — Run Locally
 
@@ -119,12 +125,13 @@ Browser ──► Next.js UI and API ──► Supabase PostgreSQL (one state ro
 git clone https://github.com/your-username/your-project.git
 cd your-project
 
-# 2. Install Node.js 20.9+ and dependencies
+# 2. Install Node.js and dependencies
 npm ci
 
-# 3. Optional: configure Supabase
+# 3. Configure a PostgreSQL database (Replit injects DATABASE_URL automatically)
 cp .env.example .env
-# Add both Supabase values to .env only if using Supabase; otherwise leave blank.
+# Set DATABASE_URL locally, then apply the schema:
+npm run db:push
 
 # 4. Run the app
 npm run dev
@@ -134,24 +141,27 @@ Open `http://localhost:5000`.
 
 ### Persistence and database setup
 
-- **Local demo mode:** with both Supabase variables absent, FreshFlow writes each shop's synthetic state to its own JSON file in `.data/` (`freshflow-demo.json` and `kedai-runcit-demo.json`). The original FreshFlow demo file remains the default shop's file. These files are local to the running workspace and are not a hosted database or multi-user store.
-- **Supabase mode:** set both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The service-role key is read only by server-side code and must never use a `NEXT_PUBLIC_` prefix. If either variable is only partially configured, or the table is unavailable, FreshFlow reports an error instead of silently falling back.
-- Apply [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor. It creates `freshflow_business_state` with one JSONB state row per business ID and copies the prior `freshflow_state` row (`id = 'demo'`) into `freshflow-demo` only if that destination row does not already exist. The legacy table is retained; the migration is repeatable and does not overwrite the new table's existing rows.
-- The demo shop selector switches between `freshflow-demo` and `kedai-runcit-demo`, whose inventory and workflow states are kept separately. This is simulated workspace switching, not authentication or secure tenant authorization. The service-role key is server-only; do not expose this demo API to public sensitive data.
-- Choosing **Reset demo** resets only the currently selected synthetic shop. The server refuses the reset if it detects any non-synthetic records in that shop.
-- Supabase configuration was not available for this local build, so live database persistence was not verified.
+- **Replit PostgreSQL is the runtime store.** The app requires `DATABASE_URL` and fails explicitly if it is unavailable; it does not silently switch to local files. Replit supplies this value for its managed database. Do not expose it to client code.
+- `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the selected database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Apply production schema changes to the production database before publishing.
+- Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
+- PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
+- Uploading only creates unverified proposals. Missing and ambiguous values are shown for owner review. The owner must explicitly choose an existing product or create a new product; only confirmation changes inventory. Imported invoice data and resulting batches are not marked synthetic, and demo reset refuses to clear a shop that contains them.
+- Shop and role switching remain demonstration conveniences, not authentication or secure tenant authorization. Do not expose this demo API to public sensitive data.
+- For existing state, `npm run db:import:local` imports known `.data/<business-id>.json` files. To import legacy Supabase state, apply `npm run db:import:supabase` with temporary `LEGACY_SUPABASE_URL` and `LEGACY_SUPABASE_SERVICE_ROLE_KEY` server environment variables. Both commands insert only missing business rows and never overwrite destination data. Legacy variables are not used by normal runtime.
+- `supabase/schema.sql` is retained only as a legacy reference; FreshFlow no longer uses Supabase at runtime.
 
 ### Tests and build
 
 ```bash
 npm test
 npm run build
+npm run db:push
 python -m unittest discover tests
 ```
 
 ### Scope and limitations
 
-All seed data, added inventory, role changes, recommendations, activity events, and staff-reported outcomes are synthetic. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a task records a staff report and never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
+Seed inventory and simulated workflow actions are synthetic. Uploaded invoice files and batches created from owner-confirmed lines are persisted as non-synthetic records. The demo date is fixed at 24 October 2026. Client-side owner/staff switching demonstrates workflow paths only; there is no real authentication or authorization. The API is not suitable for production or public sensitive data. Completing a staff task records a report and never changes inventory quantities. No POS, sales forecasts, automatic discounts, disposal actions, or waste-reduction claims are included.
 
 ---
 
@@ -160,7 +170,8 @@ All seed data, added inventory, role changes, recommendations, activity events, 
 Use this section for accurate team evidence. The app is configured to run through Replit's web preview; no hosting or deployment claim is made here.
 
 - **Development:** The FreshFlow Next.js app runs from the repository's `.replit` configuration.
-- **Secrets:** Optional Supabase server credentials belong in Replit Secrets, never in source control.
+- **Database:** Replit-managed PostgreSQL stores shop state and private invoice originals.
+- **Secrets:** `DATABASE_URL` is supplied by Replit. Legacy Supabase credentials are used only for an explicitly run migration and must stay server-side.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](submission/SDC2026_TeamName_Replit_POU.pdf)
 

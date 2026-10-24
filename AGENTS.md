@@ -68,7 +68,7 @@ The intended MVP architecture is:
 -   **Application:** Next.js with TypeScript.
 -   **Server-side functionality:** Next.js server-side code and route
     handlers where appropriate.
--   **Database:** Supabase PostgreSQL.
+-   **Database:** Replit-managed PostgreSQL.
 -   **Authentication and roles:** Simulated roles are acceptable for the
     MVP where appropriate. Do not imply that simulated authorization is
     production-grade security.
@@ -129,8 +129,8 @@ The core demonstration should show a complete journey:
     Document required variables without exposing their values.
 5.  Never commit `.env` files, API keys, credentials, tokens, or private
     user data. Example environment files must contain placeholders only.
-6.  Never expose Supabase service-role credentials or other privileged
-    secrets to client-side code.
+6.  Never expose database credentials, legacy Supabase service-role
+    credentials, or other privileged secrets to client-side code.
 7.  Enforce access control on the server for protected operations in any
     real authenticated deployment. Client-side role checks alone are not
     security.

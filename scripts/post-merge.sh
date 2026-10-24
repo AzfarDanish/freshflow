@@ -7,3 +7,4 @@ if [[ ! -f package-lock.json ]]; then
 fi
 
 npm ci --no-audit --no-fund
+npm run db:push

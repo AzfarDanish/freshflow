@@ -99,6 +99,7 @@ export function createSeedState(): AppState {
     recommendations: [],
     tasks: [],
     activity: [],
+    invoiceIntakes: [],
     settings: { thresholdDays: 7, demoDate: DEMO_DATE },
   };
   reconcileRisks(state, SEED_TIME);
@@ -112,6 +113,7 @@ export function createBusinessSeedState(businessId: string): AppState {
     recommendations: [],
     tasks: [],
     activity: [],
+    invoiceIntakes: [],
     settings: { thresholdDays: 7, demoDate: DEMO_DATE },
   };
 }

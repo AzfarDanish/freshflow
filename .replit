@@ -1,6 +1,6 @@
 run = "npm run dev"
 entrypoint = "app/page.tsx"
-modules = ["python-3.12", "nodejs-24"]
+modules = ["python-3.12", "nodejs-24", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"

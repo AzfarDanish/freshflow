@@ -6,6 +6,7 @@ import {
 import { dispatchAction } from "@/src/lib/store";
 import {
   TASK_OUTCOME_TYPES,
+  type InvoiceProposalInput,
   type InventoryAction,
   type TaskOutcomeType,
 } from "@/src/lib/types";
@@ -38,6 +39,41 @@ function optionalText(value: unknown, label: string, maxLength: number): string 
     throw new Error(`${label} must be ${maxLength} characters or fewer.`);
   }
   return normalized || undefined;
+}
+
+function editableText(value: unknown, label: string, maxLength: number): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new Error(`${label} must be text.`);
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new Error(`${label} must be ${maxLength} characters or fewer.`);
+  }
+  return normalized;
+}
+
+function invoiceFields(value: unknown): InvoiceProposalInput {
+  if (!isRecord(value)) throw new Error("Invoice proposal fields are required.");
+  const quantity = value.quantity;
+  if (
+    quantity !== null &&
+    quantity !== undefined &&
+    (typeof quantity !== "number" ||
+      !Number.isFinite(quantity) ||
+      quantity <= 0 ||
+      quantity > 100_000)
+  ) {
+    throw new Error("Quantity must be a positive number from 0 to 100,000.");
+  }
+  return {
+    productName: editableText(value.productName, "Product name", 160),
+    sku: editableText(value.sku, "SKU", 60),
+    category: editableText(value.category, "Category", 60),
+    quantity: typeof quantity === "number" ? quantity : null,
+    unit: editableText(value.unit, "Unit", 40),
+    batchId: editableText(value.batchId, "Batch ID", 80),
+    expiryDate: editableText(value.expiryDate, "Expiry date", 30),
+    matchedProductId: optionalText(value.matchedProductId, "Matched product", 100),
+  };
 }
 
 function demoRole(
@@ -120,6 +156,41 @@ function parseAction(input: unknown): InventoryAction {
         },
       };
     }
+    case "edit_invoice_proposal":
+      return {
+        type: "edit_invoice_proposal",
+        payload: {
+          intakeId: text(payload.intakeId, "Invoice", 100),
+          proposalId: text(payload.proposalId, "Invoice line", 100),
+          fields: invoiceFields(payload.fields),
+          role: demoRole(payload.role, "owner"),
+        },
+      };
+    case "confirm_invoice_proposal": {
+      const matchMode = payload.matchMode;
+      if (matchMode !== "existing" && matchMode !== "new") {
+        throw new Error("Choose an existing product or create a new product.");
+      }
+      return {
+        type: "confirm_invoice_proposal",
+        payload: {
+          intakeId: text(payload.intakeId, "Invoice", 100),
+          proposalId: text(payload.proposalId, "Invoice line", 100),
+          fields: invoiceFields(payload.fields),
+          matchMode,
+          role: demoRole(payload.role, "owner"),
+        },
+      };
+    }
+    case "discard_invoice_proposal":
+      return {
+        type: "discard_invoice_proposal",
+        payload: {
+          intakeId: text(payload.intakeId, "Invoice", 100),
+          proposalId: text(payload.proposalId, "Invoice line", 100),
+          role: demoRole(payload.role, "owner"),
+        },
+      };
     case "set_threshold": {
       const thresholdDays = payload.thresholdDays;
       if (

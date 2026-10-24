@@ -11,6 +11,8 @@ import {
 import { BUSINESS_WORKSPACES, DEFAULT_BUSINESS_ID } from "@/src/lib/businesses";
 import { TASK_OUTCOME_LABELS } from "@/src/lib/types";
 import type { ActivityEvent, AppState, InventoryAction, InventoryBatch, Product, Recommendation, StaffTask, StateResponse, TaskOutcomeType } from "@/src/lib/types";
+import { InvoiceIntakePanel } from "@/app/invoice-intake/InvoiceIntakePanel";
+import type { InvoiceIntakePanelProps } from "@/app/invoice-intake/InvoiceIntakePanel";
 
 type Role = "owner" | "staff";
 type ModalKind = "add" | "edit" | "approve" | "reject" | "complete" | "reset" | null;
@@ -18,7 +20,7 @@ type InventorySelection = { product: Product; batch: InventoryBatch };
 type InventoryFilter = "all" | "expired" | "approaching" | "safe";
 
 const emptyState: AppState = {
-  products: [], recommendations: [], tasks: [], activity: [],
+  products: [], recommendations: [], tasks: [], activity: [], invoiceIntakes: [],
   settings: { thresholdDays: 3, demoDate: "" },
 };
 
@@ -191,6 +193,102 @@ export default function HomePage() {
     }
   }, [businessId]);
 
+  const runInvoiceRequest = useCallback(async (
+    request: () => Promise<Response>,
+  ) => {
+    setBusy(true);
+    setActionError("");
+    try {
+      const res = await request();
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Invoice action could not be saved.");
+      setResponse(body as StateResponse);
+      setToastError(false);
+      return body as StateResponse;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invoice action could not be saved.";
+      setActionError(message);
+      setToastError(true);
+      throw new Error(message);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const uploadInvoice = useCallback(async (file: File) => {
+    const form = new FormData();
+    form.set("businessId", businessId);
+    form.set("file", file);
+    await runInvoiceRequest(() => fetch("/api/invoices", {
+      method: "POST",
+      body: form,
+      headers: { Accept: "application/json" },
+    }));
+  }, [businessId, runInvoiceRequest]);
+
+  const saveInvoiceProposal = useCallback(async (
+    intakeId: string,
+    proposalId: string,
+    fields: Parameters<InvoiceIntakePanelProps["onSaveProposal"]>[2],
+  ) => {
+    const { matchedProductId, ...proposalFields } = fields;
+    await runInvoiceRequest(() => fetch("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        businessId,
+        action: {
+          type: "edit_invoice_proposal",
+          payload: {
+            intakeId,
+            proposalId,
+            fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined },
+            role,
+          },
+        },
+      }),
+    }));
+  }, [businessId, role, runInvoiceRequest]);
+
+  const confirmInvoiceProposal = useCallback(async (
+    intakeId: string,
+    proposalId: string,
+    fields: Parameters<InvoiceIntakePanelProps["onConfirmProposal"]>[2],
+  ) => {
+    const { matchMode, matchedProductId, ...proposalFields } = fields;
+    await runInvoiceRequest(() => fetch("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        businessId,
+        action: {
+          type: "confirm_invoice_proposal",
+          payload: {
+            intakeId,
+            proposalId,
+            fields: { ...proposalFields, matchedProductId: matchedProductId ?? undefined },
+            matchMode,
+            role,
+          },
+        },
+      }),
+    }));
+  }, [businessId, role, runInvoiceRequest]);
+
+  const discardInvoiceProposal = useCallback(async (intakeId: string, proposalId: string) => {
+    await runInvoiceRequest(() => fetch("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        businessId,
+        action: {
+          type: "discard_invoice_proposal",
+          payload: { intakeId, proposalId, role },
+        },
+      }),
+    }));
+  }, [businessId, role, runInvoiceRequest]);
+
   const batches = useMemo(() => productBatches(state.products, state.settings.demoDate, state.settings.thresholdDays), [state.products, state.settings.demoDate, state.settings.thresholdDays]);
   const pendingRecommendations = state.recommendations.filter((recommendation) => recommendation.status === "pending");
   const visibleRecommendations = [...state.recommendations].sort((a, b) => {
@@ -352,7 +450,7 @@ export default function HomePage() {
               ))}
             </select>
           </div>
-          <div className="mode-pill" title={response?.persistenceMode === "supabase" ? "Persisted with Supabase" : "Stored in local demo mode"}><span className="mode-dot" />{response?.persistenceMode === "supabase" ? "Supabase" : "Local demo"}</div>
+          <div className="mode-pill" title={response?.persistenceMode === "replit_postgres" ? "Persisted with Replit PostgreSQL" : "Test-only local persistence"}><span className="mode-dot" />{response?.persistenceMode === "replit_postgres" ? "Replit DB" : "Test local"}</div>
           <div className="role-select"><label htmlFor="role">Demo role</label><select id="role" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={busy || modal !== null}><option value="owner">Owner</option><option value="staff">Staff</option></select><ChevronDown size={12} /></div>
         </div>
       </header>
@@ -362,18 +460,31 @@ export default function HomePage() {
         <div className="date-meta"><Clock3 />Demo date <strong>{dateLabel(state.settings.demoDate)}</strong></div>
       </div>
 
-      <div className="notice"><CircleHelp size={15} /><span><strong>Synthetic demo data.</strong> Shop and role switching are demonstration conveniences—not authentication or secure data isolation. Records and events are simulated.</span><span className="notice-right">NO LIVE INVENTORY</span></div>
+      <div className="notice"><CircleHelp size={15} /><span><strong>Demo workflow.</strong> Shop and role switching are demonstrations, not authentication or secure access controls. Invoice files and owner-confirmed batches are persisted in Replit PostgreSQL.</span><span className="notice-right">NO LIVE STOCK SYNC</span></div>
+      {actionError && <div className="error-card" role="alert">{actionError}<button className="btn btn-small" onClick={() => setActionError("")} style={{ marginLeft: 12 }}>Dismiss</button></div>}
 
       {loadError ? <div className="error-card" role="alert">{loadError}<button className="btn btn-small" onClick={() => void loadState(businessId)} style={{ marginLeft: 12 }}><RefreshCw size={13} /> Retry</button></div> : <>
         <div className="metrics">
           <div className="metric alert"><div className="metric-label">Expired batches</div><div className="metric-number">{loading ? "—" : batches.expired.length}<small>separate from approaching</small></div></div>
           <div className="metric warn"><div className="metric-label">Approaching</div><div className="metric-number">{loading ? "—" : batches.approaching.length}<small>within {state.settings.thresholdDays} days</small></div></div>
           <div className="metric"><div className="metric-label">Open staff tasks</div><div className="metric-number">{loading ? "—" : openTasks.length}<small>{state.tasks.length} total</small></div></div>
-          <div className="metric"><div className="metric-label">Units recorded</div><div className="metric-number">{loading ? "—" : totalUnits}<small>synthetic batches</small></div></div>
+          <div className="metric"><div className="metric-label">Units recorded</div><div className="metric-number">{loading ? "—" : totalUnits}<small>demo + invoice batches</small></div></div>
         </div>
 
         <div className="workspace">
           <div className="left-stack">
+            <InvoiceIntakePanel
+              businessId={businessId}
+              businessName={response?.business.name ?? "this demo shop"}
+              role={role}
+              products={state.products}
+              intakes={state.invoiceIntakes}
+              busy={busy || loading}
+              onUpload={uploadInvoice}
+              onSaveProposal={saveInvoiceProposal}
+              onConfirmProposal={confirmInvoiceProposal}
+              onDiscardProposal={discardInvoiceProposal}
+            />
             <Panel id="inventory-panel">
               <div className="panel-head">
                 <div><div className="panel-title"><Package />Stock by expiry</div><div className="panel-subtitle">Batch-level view · expiry groups are mutually exclusive</div></div>
