@@ -58,6 +58,7 @@ export function InventoryAssistant({ role }: { role: Role }) {
     if (!question.trim() || busy) return;
     setBusy(true);
     setError("");
+    setResult(null);
     try {
       const response = await apiJson<AssistantResponse>("/api/assistant", {
         method: "POST",
@@ -142,6 +143,7 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
+  const [insightError, setInsightError] = useState("");
   const retryRequestId = useRef<string | null>(null);
   const reversalRequests = useRef<Record<string, string>>({});
   const assistantRequestId = useId();
@@ -239,7 +241,8 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
   async function explain() {
     if (!data) return;
     setBusy("assistant");
-    setFormError("");
+    setInsightError("");
+    setInsightAnswer(null);
     try {
       const result = await apiJson<AssistantResponse>("/api/assistant", {
         method: "POST",
@@ -248,7 +251,7 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
       });
       setInsightAnswer(result);
     } catch (reason) {
-      setFormError(reason instanceof Error ? reason.message : "Could not explain these insights.");
+      setInsightError(reason instanceof Error ? reason.message : "Could not explain these insights.");
     } finally { setBusy(""); }
   }
   const [insightAnswer, setInsightAnswer] = useState<AssistantResponse | null>(null);
@@ -267,8 +270,8 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
       </header>
       <div className={styles.body}>
         <div className={styles.filterRow}>
-          <div className={styles.field}><label htmlFor={`${assistantRequestId}-from`}>From</label><input id={`${assistantRequestId}-from`} type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} /></div>
-          <div className={styles.field}><label htmlFor={`${assistantRequestId}-to`}>To</label><input id={`${assistantRequestId}-to`} type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} /></div>
+          <div className={styles.field}><label htmlFor={`${assistantRequestId}-from`}>From</label><input id={`${assistantRequestId}-from`} type="date" value={from} max={to} onChange={(event) => { setFrom(event.target.value); setInsightAnswer(null); setInsightError(""); }} /></div>
+          <div className={styles.field}><label htmlFor={`${assistantRequestId}-to`}>To</label><input id={`${assistantRequestId}-to`} type="date" value={to} min={from} onChange={(event) => { setTo(event.target.value); setInsightAnswer(null); setInsightError(""); }} /></div>
         </div>
       </div>
       {error && <div className={styles.feedback} role="alert">{error} <button className={styles.button} type="button" onClick={() => void load()}>Retry</button></div>}
@@ -310,6 +313,7 @@ export function InsightsPanel({ products, onChanged }: { products: Product[]; on
             </div>
           ) : <p className={styles.empty}>No daily records in this date range.</p>}
           <div className={styles.actions}><button type="button" className={styles.button} onClick={() => void explain()} disabled={busy === "assistant"}>{busy === "assistant" ? "Preparing explanation…" : "Explain recorded insights"}</button></div>
+          {insightError && <div className={styles.feedback} role="alert">{insightError}</div>}
           {insightAnswer && <article className={styles.record} style={{ marginTop: 12 }}><div className={styles.recordHead}><strong className={styles.recordTitle}>Assistant explanation</strong><span className={styles.muted}>{displayDate(insightAnswer.computedAt)}</span></div><p className={styles.recordBody}>{insightAnswer.answer}</p>{insightAnswer.evidence.length > 0 && <ul className={styles.evidence}>{insightAnswer.evidence.map((item) => <li key={item.id}>{item.label} ({item.kind})</li>)}</ul>}{insightAnswer.limitations.length > 0 && <p className={styles.muted}>Limitations: {insightAnswer.limitations.join(" ")}</p>}</article>}
           <h3 className={styles.subhead}>Record a stock movement</h3>
           <form onSubmit={(event) => void submitMovement(event)}>

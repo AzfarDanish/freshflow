@@ -14,7 +14,7 @@ Persisted application records remain the source of truth. Supported changes upda
 
 The profile switcher stores the selected testing role in a short-lived, signed browser cookie. This preserves the display choice; it does not authenticate a person or protect records.
 
-Task completion records the reported outcome and audit history; it does not claim to change stock quantities. Invoice review retains the uploaded original, extracted values, Owner-approved receipt lines, and correction history. The assistant's answers are grounded in the stored records and its failures remain visible; it does not invent activity or missing facts. OCR and AI output still require operational review.
+Task completion records the reported outcome and audit history; it does not claim to change stock quantities. Invoice review retains the uploaded original, extracted values, Owner-approved receipt lines, and correction history. The assistant's answers are grounded in the stored records and its failures remain visible; it does not invent activity or missing facts. The assistant uses OpenRouter's `deepseek/deepseek-v4-flash-0731` model only to select a permitted read-only query; numeric results and evidence come from current persisted records. OCR and AI output still require operational review.
 
 Refreshing or moving between pages never resets the database. The settings page offers no blanket reset for operational records. The separate legacy-cleanup review is a deliberate, digest-confirmed operation that first backs up the state and only affects individually reviewed eligible records; ambiguous records are retained.
 

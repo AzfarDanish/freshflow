@@ -168,6 +168,7 @@ Open `http://localhost:5000`.
 
 - **Replit PostgreSQL is the runtime store.** The app requires `DATABASE_URL` and fails explicitly if it is unavailable; it does not silently switch to local files. Replit supplies this value for its managed database. Do not expose it to client code.
 - `SESSION_SECRET` is required to sign and verify preview-role cookies. Keep it server-only in Replit Secrets and available in production; changing it invalidates existing role previews, which fall back to Staff.
+- The read-only assistant uses `OPENROUTER_API_KEY` from Replit Secrets with the fixed OpenRouter model `deepseek/deepseek-v4-flash-0731` (DeepSeek V4 Flash 0731, not V4.1 Flash). Each question reads the current persisted business state; the model only selects a supported query, while answers and evidence are computed from those records. Assistant requests fail visibly if OpenRouter is unavailable.
 - `src/lib/db/schema.ts` is the schema source. `npm run db:push` applies it to the development database; startup and production builds do not run DDL. The post-merge setup applies it to the development database. Replit's Publish flow applies the development-to-production schema diff when you publish.
 - Each shop has an independent JSONB state row. Invoice originals are stored in a private `bytea` table in the same database, scoped to the shop, and limited to 5 MB per upload. Downloads are served through a business-scoped, no-store API route, not a public object URL.
 - PDF intake supports text-based PDFs whose table columns are selectable and separated in the PDF text layer, or labeled line-item fields. Scanned/image-only PDFs are unsupported because OCR is not configured. CSV intake requires UTF-8 with a header row; recognized headers include SKU, product/description, category, quantity, unit, batch/lot and expiry.
@@ -201,7 +202,7 @@ Use this section for accurate team evidence. The app is configured to run throug
 
 - **Development:** The FreshFlow Next.js app runs from the repository's `.replit` configuration.
 - **Database:** Replit-managed PostgreSQL stores shop state and private invoice originals.
-- **Secrets:** `DATABASE_URL` is supplied by Replit. Legacy Supabase credentials are used only for an explicitly run migration and must stay server-side.
+- **Secrets:** `DATABASE_URL` is supplied by Replit. `OPENROUTER_API_KEY`, `SESSION_SECRET`, and any legacy Supabase credentials must stay server-side in Replit Secrets.
 
 📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](submission/SDC2026_TeamName_Replit_POU.pdf)
 

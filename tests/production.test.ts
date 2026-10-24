@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBusinessSeedState, reconcileRisks } from "../src/lib/expiry";
 import { applyOperationalAction, operationalReport } from "../src/lib/operations";
 import { applyReceivingAction } from "../src/lib/receiving";
-import { answerFromFacts } from "../src/lib/assistant";
+import { answerFromFacts, inventoryQuestion } from "../src/lib/assistant";
+import { getPool } from "../src/lib/db";
 import { getPreviewIdentity } from "../src/lib/identity";
 import { PREVIEW_ROLE_COOKIE, signPreviewRoleCookie } from "../src/lib/role-session";
 import { legacyCleanupReport, applyLegacyCleanup } from "../src/lib/legacy-cleanup";
@@ -11,6 +12,7 @@ import type { AppState } from "../src/lib/types";
 import type { BusinessIdentity } from "../src/lib/operational-types";
 vi.mock("server-only",()=>({}));
 vi.mock("next/headers",()=>({cookies:async()=>({get:()=>undefined})}));
+vi.mock("../src/lib/db",()=>({getPool:vi.fn()}));
 const owner:BusinessIdentity={userId:"verified-owner",businessId:"freshflow-demo",actualRole:"owner",role:"owner"};
 const staff:BusinessIdentity={...owner,userId:"verified-staff",actualRole:"staff",role:"staff"};
 const now="2026-10-24T08:00:00.000Z";
@@ -23,7 +25,7 @@ function state():AppState {
 function movement(overrides:Record<string,unknown>={}) {return {type:"record_movement",payload:{requestId:"request-sale",kind:"sale",productId:"p",batchId:"B",quantity:2,unitPriceMinor:500,unitCostMinor:250,reason:"Recorded till sale",occurredAt:now,...overrides}};}
 function receipt(s:AppState,amount=3,requestId="receipt-request") {return {type:"receive_invoice",payload:{intakeId:"i",requestId,confirmed:true,lines:[{proposalId:"l",quantity:amount,batchId:"DELIVERY",expiryDate:"2026-10-27",matchMode:"existing",fields:{...s.invoiceIntakes[0].proposals[0]}}]}};}
 beforeEach(()=>{vi.setSystemTime(new Date(now));});
-afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();});
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();vi.unstubAllGlobals();});
 describe("real operational foundation",()=>{
   it("starts unknown businesses empty, never recreates a fixture",()=>expect(createBusinessSeedState("new-business").products).toEqual([]));
   it("persists sale deltas, retries idempotently and rejects conflicting request reuse",()=>{
@@ -100,6 +102,64 @@ describe("read-only assistant and migration safety",()=>{
     const s=state(),before=structuredClone(s),answer=answerFromFacts(s,{tool:"stock",search:"APP"},staff);
     expect(answer.evidence[0].facts.quantity).toBe(10);expect(s).toEqual(before);
     expect(()=>answerFromFacts(s,{tool:"insights"},staff)).toThrow("permissions");
+  });
+  it("uses OpenRouter's selected DeepSeek model to plan a question, then grounds results in the latest stored state",async()=>{
+    const stored=state();stored.products[0].batches[0].quantity=7;
+    const query=vi.fn().mockResolvedValue({rows:[{state:stored}]});
+    vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
+    vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
+    const fetchMock=vi.fn(async (_input:RequestInfo|URL, _init?:RequestInit)=>new Response(JSON.stringify({
+      choices:[{message:{content:JSON.stringify({tool:"stock",search:"APP"})}}],
+    }),{status:200,headers:{"Content-Type":"application/json"}}));
+    vi.stubGlobal("fetch",fetchMock);
+
+    const response=await inventoryQuestion("How many apples are recorded?",staff,{});
+
+    expect(query).toHaveBeenCalledWith(
+      "SELECT state FROM freshflow_business_state WHERE business_id=$1",
+      [staff.businessId],
+    );
+    expect(response.evidence[0].facts.quantity).toBe(7);
+    expect(response.answer).toContain("1 matching stock batch");
+    const requestBody=JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(requestBody.model).toBe("deepseek/deepseek-v4-flash-0731");
+    expect(requestBody.messages[0].content).toContain("Effective role: staff");
+  });
+  it("fails clearly without OpenRouter credentials and does not fabricate an answer",async()=>{
+    vi.stubEnv("OPENROUTER_API_KEY","");
+    const fetchMock=vi.fn();
+    vi.stubGlobal("fetch",fetchMock);
+    await expect(inventoryQuestion("How many apples are recorded?",staff,{}))
+      .rejects.toMatchObject({status:503,message:expect.stringContaining("OpenRouter API key")});
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("reports provider outages without returning a fabricated answer",async()=>{
+    const query=vi.fn().mockResolvedValue({rows:[{state:state()}]});
+    vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
+    vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response("upstream unavailable",{status:503})));
+    await expect(inventoryQuestion("How many apples are recorded?",staff,{}))
+      .rejects.toMatchObject({status:503,message:expect.stringContaining("OpenRouter connection")});
+  });
+  it("enforces Staff restrictions even when the model selects a protected query",async()=>{
+    const stored=state(),query=vi.fn().mockResolvedValue({rows:[{state:stored}]});
+    vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
+    vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({
+      choices:[{message:{content:JSON.stringify({tool:"insights"})}}],
+    }),{status:200,headers:{"Content-Type":"application/json"}})));
+    await expect(inventoryQuestion("What is the revenue?",staff,{}))
+      .rejects.toMatchObject({status:403,message:expect.stringContaining("permissions")});
+  });
+  it("also rejects Staff access to pending decision details",async()=>{
+    const stored=state(),query=vi.fn().mockResolvedValue({rows:[{state:stored}]});
+    vi.mocked(getPool).mockReturnValue({query} as unknown as ReturnType<typeof getPool>);
+    vi.stubEnv("OPENROUTER_API_KEY","test-openrouter-key");
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({
+      choices:[{message:{content:JSON.stringify({tool:"decisions"})}}],
+    }),{status:200,headers:{"Content-Type":"application/json"}})));
+    await expect(inventoryQuestion("Which decisions are pending?",staff,{}))
+      .rejects.toMatchObject({status:403,message:expect.stringContaining("permissions")});
   });
   it("requires exact confirmation and retains flag-only user entries, invoices, and work",()=>{
     const s=createSeedState();s.products.push({...state().products[0],simulated:true});
