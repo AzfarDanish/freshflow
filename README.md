@@ -37,8 +37,8 @@ See the [hackathon preview guide](docs/production-transition.md) for public-acce
 | Replit Project    | https://replit.com/t/deepbit/repls/freshflow   |
 | Live Demo         | https://freshflow-azfardns.replit.app          |
 | RunPod Endpoint   | none                                           |
-| Slide Deck        | https://example.com/slides                     |
-| Demo Video        | https://example.com/demo-video                 |
+| Slide Deck        | https://drive.google.com/file/d/1V3tjdfGCCLq2Pc7-lNDkce94SF8ogXuu/view?usp=sharing |
+| Demo Video        | https://youtu.be/gsSjp_diX9k                   |
 
 ---
 
@@ -46,22 +46,22 @@ See the [hackathon preview guide](docs/production-transition.md) for public-acce
 
 ### Problem
 
-Small grocery teams can have difficulty spotting expiry issues across separate stock batches and turning those issues into clearly owned work. FreshFlow demonstrates a focused exception-to-action workflow using batch quantities and expiry dates.
+Micro and small grocery businesses often manage inventory using spreadsheets, paper records, and manual stock checks. Monitoring product expiry dates becomes difficult when items arrive in multiple batches, each with different quantities and shelf lives. When expiry risks are missed or follow-ups are delayed, grocers lose stock value and face avoidable food waste (estimated at 31.9–97.3 kg per capita annually in Malaysia, with expired food cited as a leading cause). The core operational bottleneck is not merely tracking stock, but ensuring that inventory exceptions reliably lead to timely, accountable staff action.
 
 ### Solution
 
-FreshFlow applies deterministic expiry-date rules, explains each flag, asks for a manager decision with optional custom directives, and creates a staff task only after approval. The MVP pairs deterministic rules with a grounded, read-only AI Assistant for conversational inventory queries without automatic or unverified stock mutations.
+FreshFlow is an inventory exception-to-action system that connects the complete operational journey: **Detect → Recommend → Approve → Act → Record**. Deterministic business rules monitor batch quantities and expiry windows to detect impending risks and generate explainable recommendations. Managers approve actions (with optional custom directives), automatically creating assigned staff tasks with clear accountability. The MVP pairs deterministic inventory rules with a grounded, read-only AI Assistant (OpenRouter DeepSeek) for natural-language queries without risk of automated or unverified stock mutations, directly advancing **UN SDG 12 (Target 12.3: Halve food waste)**.
 
 ### Key Features
 
-- **Expiry visibility** — Show expired stock separately from batches within a configurable expiry window.
-- **Human-reviewed actions** — Explain a recommendation and let the manager approve with custom directives or reject it.
-- **Accountable follow-through** — Assign work after approval, record a structured staff-reported outcome (with an explanation for “Other”), and show linked events chronologically.
-- **Supplier invoice intake & receiving** — Upload PDF, CSV, PNG, or JPEG invoices via a collapsible drawer; verify realistic item extractions with transparent sample disclosures; safely cancel unconfirmed intakes with permanent file deletion; match catalog products, record partial deliveries and discrepancy notes; and post batches only upon physical receipt confirmation.
-- **Waste recording & stock corrections** — Dedicated manager workflows on inventory batches to record waste (by reason category and verified cost) or correct shelf inventory discrepancies with mandatory audit reasons.
-- **Waste insights & trends** — Proportional SVG trends chart with RM / unit metrics toggle, interval Y-axis, unverified cost indicators, and real-time cross-tab synchronization.
+- **Detect (Expiry visibility)** — Show expired stock separately from batches within a configurable expiry window based on deterministic calculations.
+- **Recommend (Explainable suggestions)** — Present clear, transparent action recommendations (discount, relocate, bundle, markdown) without fabricating unavailable metrics.
+- **Approve (Human-in-the-loop control)** — Explain recommendation context and let the manager approve with custom instructions or reject.
+- **Act (Accountable staff tasks)** — Automatically assign work upon approval, track progress (Not started, In progress, Blocked), and capture structured staff-reported outcomes.
+- **Record (Activity ledger & Waste Insights)** — Log all inventory events chronologically; track waste quantities and verified costs via an interactive SVG trends chart with dynamic intervals and real-time synchronization.
+- **Supplier invoice intake & receiving** — Collapsible upload drawer for PDF, CSV, PNG, or JPEG; realistic prototype extractions with transparent sample disclosures; safe cancellation with permanent PostgreSQL file cleanup; catalog matching, partial deliveries, and discrepancy notes.
 - **Operations search & filtering** — Real-time search and status filters across Decisions, Staff Tasks, Inventory, and Waste Insights movement history.
-- **Grounded AI assistant** — Ask questions about store stock, expiry alerts, decisions, tasks, and waste insights with grounded natural-language responses backed by database facts.
+- **Grounded AI assistant** — Conversational inventory queries powered by OpenRouter DeepSeek (`deepseek/deepseek-v4-flash-0731`) grounded strictly in verified database records.
 
 ### Interface
 
@@ -112,9 +112,11 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 ├── src/
 │   ├── main.py              # Preserved Python starter entry point
 │   └── utils.py             # Preserved Python starter helpers
-├── submission/              # Required submission documents
-│   ├── SDC2026_TeamName_Preliminary.pdf      # Preliminary submission
-│   ├── SDC2026_TeamName_TechDeclaration.pdf  # Technology declaration
+├── submission/              # Official submission materials
+│   ├── 1. SDC Hackathon_ Submission Template.docx # Preliminary Project Proposal (.docx)
+│   ├── 2. SDC Hackathon_ Technical Tools Declaration Template.docx # Technical & Tools Declaration (.docx)
+│   ├── SDC2026_TeamName_Preliminary.pdf      # Preliminary submission PDF
+│   ├── SDC2026_TeamName_TechDeclaration.pdf  # Technology declaration PDF
 │   ├── SDC2026_TeamName_Replit_POU.pdf       # Replit proof of use
 │   └── SDC2026_TeamName_Runpod_POU.pdf       # RunPod proof of use
 ├── tests/
@@ -131,10 +133,21 @@ New or invalid preview sessions use Staff permissions. The public preview switch
 ### Architecture
 
 ```
-Browser ──► Next.js App Router & API ──► Supabase PostgreSQL
-                                          ├── relational tables (products, batches, recommendations, tasks, activity)
-                                          ├── operational state, suppliers & movements ledger
-                                          └── private invoice documents (bytea)
+Manager / Staff (Web Browser)
+             │
+             ▼
+Next.js App Router (UI & API Routes)
+             │
+             ├──► Permission & Access Control (Signed Preview Cookies)
+             ├──► Deterministic Rules Engine (Expiry Risk Detection & Actions)
+             │
+             ├──► Supabase PostgreSQL Database
+             │     ├── relational tables (products, batches, recommendations, tasks, activity)
+             │     ├── operational state, suppliers & movements ledger
+             │     └── private invoice documents (bytea)
+             │
+             └──► OpenRouter API (DeepSeek V4 Flash)
+                   User Query ──► Local Context Retrieval ──► Grounded Read-Only Response
 ```
 
 ---
