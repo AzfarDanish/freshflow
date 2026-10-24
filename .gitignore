@@ -11,3 +11,12 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Next.js / Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Local FreshFlow demo data
+.data/
