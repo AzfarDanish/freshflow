@@ -266,29 +266,29 @@ FreshFlow does not use RunPod. The original Python handler and dependency files 
 
 ## Team
 
-| Name        | Role                     | GitHub                                   |
-| ----------- | ------------------------ | ---------------------------------------- |
-| Member Name | Team Lead / Full Stacked | [@AzfarDanish](https://github.com/AzfarDanish) |
-| Member Name | Frontend                 | [@damiaulwan](https://github.com/damiaulwan) |
-| Member Name | Fronted                  | [@Nik-Faiz](https://github.com/Nik-Faiz) |
-| Member Name | Backend                  | [@wannurzulaikha76](https://github.com/wannurzulaikha76) |
-| Member Name | AI                       | [@maqielfaris77](https://github.com/maqielfaris77) |
+| Name            | Role                     | GitHub                                   |
+| --------------- | ------------------------ | ---------------------------------------- |
+| Azfar Danish    | Team Lead / Full Stack   | [@AzfarDanish](https://github.com/AzfarDanish) |
+| Damia Ulwan     | Frontend                 | [@damiaulwan](https://github.com/damiaulwan) |
+| Nik Faiz        | Frontend                 | [@Nik-Faiz](https://github.com/Nik-Faiz) |
+| Wan Nurzulaikha | Backend                  | [@wannurzulaikha76](https://github.com/wannurzulaikha76) |
+| Maqiel Faris    | AI                       | [@maqielfaris77](https://github.com/maqielfaris77) |
 
 
 ---
 
 ## Submission Checklist
 
-- [ ] Team name, domain (Domain 1 / Domain 2) and SDG track filled in
-- [ ] Slide deck link added
-- [ ] Demo video link added
-- [ ] Replit used, with proof of use in `submission/`
-- [ ] RunPod used, with proof of use in `submission/`
-- [ ] Preliminary submission completed (`SDC2026_TeamName_Preliminary.pdf`)
-- [ ] Technology declaration completed (`SDC2026_TeamName_TechDeclaration.pdf`)
+- [x] Team name, domain (Domain 1 / Domain 2) and SDG track filled in
+- [x] Slide deck link added
+- [x] Demo video link added
+- [x] Replit used, with proof of use in `submission/`
+- [x] RunPod used, with proof of use in `submission/`
+- [x] Preliminary submission completed (`SDC2026_TeamName_Preliminary.pdf` / `1. SDC Hackathon_ Submission Template.docx`)
+- [x] Technology declaration completed (`SDC2026_TeamName_TechDeclaration.pdf` / `2. SDC Hackathon_ Technical Tools Declaration Template.docx`)
 - [ ] Submission files renamed with your team name (replace `TeamName`)
-- [ ] "How to Run" steps verified
-- [ ] No API keys or secrets committed to the repository
+- [x] "How to Run" steps verified
+- [x] No API keys or secrets committed to the repository
 
 ## License
 
